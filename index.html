@@ -9,52 +9,90 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
+  :root{
+    --bg:#f7f6f2; --surface:#ffffff; --border:#e2e0d8; --text:#1c1c1a; --text-muted:#6b6a63; --hint:#8a887f;
+    --primary:#185fa5; --primary-hover:#0c447c; --primary-text:#ffffff;
+    --secondary-bg:#f1efe8; --secondary-hover:#e2e0d8;
+    --danger-bg:#fceceb; --danger-text:#a32d2d;
+    --input-border:#d3d1c7; --input-bg:#ffffff;
+    --pill-blue-bg:#e6f1fb; --pill-blue-text:#0c447c;
+    --pill-amber-bg:#faeeda; --pill-amber-text:#854f0b;
+    --pill-green-bg:#eaf3de; --pill-green-text:#3b6d11;
+    --pill-red-bg:#fceceb; --pill-red-text:#a32d2d;
+    --detail-bg:#f8f7f2; --detail-text:#4a4942;
+    --row-border:#f1efe8;
+    --shadow:0 8px 24px rgba(0,0,0,.12);
+    --overlay:rgba(28,28,26,.45);
+  }
+  [data-theme="dark"]{
+    --bg:#141412; --surface:#212120; --border:#3a3934; --text:#ece9e1; --text-muted:#b3b0a6; --hint:#93907f;
+    --primary:#4f9ae0; --primary-hover:#6fb0ea; --primary-text:#0b1e2f;
+    --secondary-bg:#2a2a27; --secondary-hover:#38372f;
+    --danger-bg:#3a2321; --danger-text:#f4a9a3;
+    --input-border:#45443a; --input-bg:#1b1b19;
+    --pill-blue-bg:#1c3350; --pill-blue-text:#8fc3f4;
+    --pill-amber-bg:#3d2f14; --pill-amber-text:#f2c477;
+    --pill-green-bg:#20351a; --pill-green-text:#9edb80;
+    --pill-red-bg:#3a2321; --pill-red-text:#f4a9a3;
+    --detail-bg:#1c1c1a; --detail-text:#cac7ba;
+    --row-border:#2a2a27;
+    --shadow:0 8px 24px rgba(0,0,0,.4);
+    --overlay:rgba(0,0,0,.6);
+  }
   *{box-sizing:border-box;}
-  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1c1c1a;background:#f7f6f2;margin:0;padding:24px;}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--text);background:var(--bg);margin:0;padding:24px;transition:background .15s,color .15s;}
   .wrap{max-width:1200px;margin:0 auto;}
   h1{font-size:20px;font-weight:600;margin:0;}
   .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;}
-  .userbox{font-size:13px;color:#6b6a63;display:flex;align-items:center;gap:10px;}
-  .tabs{display:flex;gap:4px;border-bottom:1px solid #e2e0d8;margin-bottom:20px;flex-wrap:wrap;}
-  .tab{padding:10px 16px;font-size:14px;font-weight:500;color:#6b6a63;background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
-  .tab.active{color:#1c1c1a;border-bottom-color:#185fa5;}
-  .card{background:#fff;border:1px solid #e2e0d8;border-radius:10px;padding:18px;margin-bottom:16px;overflow-x:auto;}
+  .userbox{font-size:13px;color:var(--text-muted);display:flex;align-items:center;gap:10px;}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:20px;flex-wrap:wrap;}
+  .tab{padding:10px 16px;font-size:14px;font-weight:500;color:var(--text-muted);background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
+  .tab.active{color:var(--text);border-bottom-color:var(--primary);}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:16px;overflow-x:auto;}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;}
-  .field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#6b6a63;}
-  .field input,.field select{padding:7px 9px;border:1px solid #d3d1c7;border-radius:6px;font-size:13px;min-width:120px;color:#1c1c1a;}
-  .btn{padding:8px 14px;border-radius:6px;border:none;background:#185fa5;color:#fff;font-size:13px;font-weight:500;cursor:pointer;}
-  .btn:hover{background:#0c447c;}
-  .btn.secondary{background:#f1efe8;color:#1c1c1a;}
-  .btn.secondary:hover{background:#e2e0d8;}
-  .btn.danger{background:#fceceb;color:#a32d2d;padding:4px 8px;font-size:12px;}
+  .field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-muted);}
+  .field input,.field select{padding:7px 9px;border:1px solid var(--input-border);border-radius:6px;font-size:13px;min-width:120px;color:var(--text);background:var(--input-bg);}
+  .btn{padding:8px 14px;border-radius:6px;border:none;background:var(--primary);color:var(--primary-text);font-size:13px;font-weight:500;cursor:pointer;}
+  .btn:hover{background:var(--primary-hover);}
+  .btn.secondary{background:var(--secondary-bg);color:var(--text);}
+  .btn.secondary:hover{background:var(--secondary-hover);}
+  .btn.danger{background:var(--danger-bg);color:var(--danger-text);padding:4px 8px;font-size:12px;}
+  .btn.icon{background:var(--secondary-bg);color:var(--text);padding:8px 10px;font-size:15px;line-height:1;}
+  .btn.icon:hover{background:var(--secondary-hover);}
   table{width:100%;border-collapse:collapse;font-size:13px;}
-  th{text-align:left;font-weight:500;color:#6b6a63;padding:8px 10px;border-bottom:1px solid #e2e0d8;white-space:nowrap;}
-  td{padding:8px 10px;border-bottom:1px solid #f1efe8;vertical-align:top;white-space:nowrap;}
+  th{text-align:left;font-weight:500;color:var(--text-muted);padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;}
+  td{padding:8px 10px;border-bottom:1px solid var(--row-border);vertical-align:top;white-space:nowrap;color:var(--text);}
   .pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:500;white-space:nowrap;}
-  .pill.aberto{background:#e6f1fb;color:#0c447c;}
-  .pill.parcial,.pill.pendente{background:#faeeda;color:#854f0b;}
-  .pill.concluido,.pill.conciliada{background:#eaf3de;color:#3b6d11;}
-  .pill.erro{background:#fceceb;color:#a32d2d;}
-  .empty{padding:30px;text-align:center;color:#8a887f;font-size:13px;}
-  textarea{width:100%;min-height:90px;font-family:monospace;font-size:12px;padding:8px;border:1px solid #d3d1c7;border-radius:6px;}
+  .pill.aberto{background:var(--pill-blue-bg);color:var(--pill-blue-text);}
+  .pill.parcial,.pill.pendente{background:var(--pill-amber-bg);color:var(--pill-amber-text);}
+  .pill.concluido,.pill.conciliada{background:var(--pill-green-bg);color:var(--pill-green-text);}
+  .pill.erro{background:var(--pill-red-bg);color:var(--pill-red-text);}
+  .empty{padding:30px;text-align:center;color:var(--hint);font-size:13px;}
+  textarea{width:100%;min-height:90px;font-family:monospace;font-size:12px;padding:8px;border:1px solid var(--input-border);border-radius:6px;background:var(--input-bg);color:var(--text);}
   .summary{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;}
-  .stat{background:#fff;border:1px solid #e2e0d8;border-radius:10px;padding:12px 16px;min-width:110px;}
-  .stat .n{font-size:20px;font-weight:600;}
-  .stat .l{font-size:12px;color:#6b6a63;}
-  .detail{background:#f8f7f2;border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px;color:#4a4942;}
-  .hint{font-size:12px;color:#8a887f;margin-top:6px;}
-  .filebox{border:1.5px dashed #d3d1c7;border-radius:10px;padding:26px;text-align:center;cursor:pointer;color:#6b6a63;font-size:13px;}
-  .filebox:hover{border-color:#185fa5;color:#185fa5;}
-  .nfitem{border-bottom:1px solid #f1efe8;padding:10px 0;}
-  .warn{background:#faeeda;color:#854f0b;border-radius:8px;padding:10px 12px;font-size:12px;margin-top:10px;}
-  #loadingOverlay{display:none;position:fixed;inset:0;background:rgba(28,28,26,.45);align-items:center;justify-content:center;z-index:9999;}
-  #loadingOverlay .box{background:#fff;padding:22px 30px;border-radius:10px;font-size:14px;color:#1c1c1a;display:flex;align-items:center;gap:12px;box-shadow:0 8px 24px rgba(0,0,0,.15);}
-  .spinner{width:18px;height:18px;border:2.5px solid #e2e0d8;border-top-color:#185fa5;border-radius:50%;animation:spin .7s linear infinite;}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;min-width:110px;}
+  .stat .n{font-size:20px;font-weight:600;color:var(--text);}
+  .stat .l{font-size:12px;color:var(--text-muted);}
+  .detail{background:var(--detail-bg);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px;color:var(--detail-text);}
+  .hint{font-size:12px;color:var(--hint);margin-top:6px;}
+  .filebox{border:1.5px dashed var(--input-border);border-radius:10px;padding:26px;text-align:center;cursor:pointer;color:var(--text-muted);font-size:13px;}
+  .filebox:hover{border-color:var(--primary);color:var(--primary);}
+  .nfitem{border-bottom:1px solid var(--row-border);padding:10px 0;}
+  .warn{background:var(--pill-amber-bg);color:var(--pill-amber-text);border-radius:8px;padding:10px 12px;font-size:12px;margin-top:10px;}
+  #loadingOverlay{display:none;position:fixed;inset:0;background:var(--overlay);align-items:center;justify-content:center;z-index:9999;}
+  #loadingOverlay .box{background:var(--surface);padding:22px 30px;border-radius:10px;font-size:14px;color:var(--text);display:flex;align-items:center;gap:12px;box-shadow:var(--shadow);}
+  .spinner{width:18px;height:18px;border:2.5px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .7s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
-  #loginScreen{max-width:360px;margin:80px auto;background:#fff;border:1px solid #e2e0d8;border-radius:12px;padding:28px;}
-  #loginScreen h2{font-size:17px;margin:0 0 16px;}
-  #loginScreen input{width:100%;padding:9px 10px;border:1px solid #d3d1c7;border-radius:6px;font-size:13px;margin-bottom:10px;}
-  #loginError{color:#a32d2d;font-size:12px;margin-bottom:10px;min-height:16px;}
+  #loginScreen{max-width:360px;margin:80px auto;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;}
+  #loginScreen h2{font-size:17px;margin:0 0 16px;color:var(--text);}
+  #loginScreen input{width:100%;padding:9px 10px;border:1px solid var(--input-border);border-radius:6px;font-size:13px;margin-bottom:10px;background:var(--input-bg);color:var(--text);}
+  #loginError{color:var(--danger-text);font-size:12px;margin-bottom:10px;min-height:16px;}
+  .modalOverlay{display:none;position:fixed;inset:0;background:var(--overlay);align-items:center;justify-content:center;z-index:9998;}
+  .modalBox{background:var(--surface);border-radius:12px;padding:24px;max-width:640px;width:92%;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow);}
+  .modalBox h3{margin:0 0 16px;font-size:16px;color:var(--text);}
+  .modalGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .modalGrid .field{grid-column:span 1;}
+  .modalActions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
 </style>
 </head>
 <body>
@@ -69,10 +107,35 @@
   <button class="btn" style="width:100%" onclick="doLogin()">Entrar</button>
 </div>
 
+<div class="modalOverlay" id="editPedidoModal">
+  <div class="modalBox">
+    <h3>Editar pedido</h3>
+    <div class="modalGrid">
+      <div class="field"><label>ID Escola</label><input id="edit_idEscola"></div>
+      <div class="field"><label>Selo</label><input id="edit_selo"></div>
+      <div class="field"><label>Código da coleção</label><input id="edit_codigoColecao"></div>
+      <div class="field"><label>Descrição da coleção</label><input id="edit_descricaoColecao"></div>
+      <div class="field"><label>Volume</label><input id="edit_volume"></div>
+      <div class="field"><label>Impresso x Digital</label>
+        <select id="edit_impressoDigital"><option value="Impresso">Impresso</option><option value="Digital">Digital</option></select>
+      </div>
+      <div class="field"><label>Quantidade</label><input id="edit_quantidade" type="number"></div>
+      <div class="field"><label>Pedido inicial x extra</label><input id="edit_pedidoInicialExtra"></div>
+      <div class="field"><label>Data do pedido</label><input id="edit_dataPedido"></div>
+      <div class="field"><label>Projeto?</label><input id="edit_projeto"></div>
+      <div class="field"><label>Tipo de faturamento</label><input id="edit_tipoFaturamento"></div>
+    </div>
+    <div class="modalActions">
+      <button class="btn secondary" onclick="closeEditModal()">Cancelar</button>
+      <button class="btn" onclick="saveEditPedido()">Salvar</button>
+    </div>
+  </div>
+</div>
+
 <div class="wrap" id="appWrap" style="display:none">
   <div class="topbar">
     <h1>Conciliador de pedidos x notas fiscais</h1>
-    <div class="userbox"><span id="userEmail"></span><button class="btn secondary" onclick="doLogout()">Sair</button></div>
+    <div class="userbox"><span id="userEmail"></span><button class="btn icon" id="themeToggle" onclick="toggleTheme()" title="Alternar tema">🌙</button><button class="btn secondary" onclick="doLogout()">Sair</button></div>
   </div>
 
   <div class="summary" id="summary"></div>
@@ -102,7 +165,7 @@
       <div class="hint">Usada para achar o CNPJ da escola na hora de conferir a NF. Cada upload <strong>substitui</strong> a base inteira.</div>
       <div class="row" style="margin-top:12px">
         <div class="field"><label>ID Escola</label><input id="e_id"></div>
-        <div class="field"><label>CNPJ</label><input id="e_cnpj"></div>
+        <div class="field"><label>CNPJ de faturamento</label><input id="e_cnpj"></div>
         <button class="btn" onclick="addEscolaManual()">Adicionar / atualizar</button>
       </div>
     </div>
@@ -168,6 +231,28 @@ function onlyDigits(s){ return (s||"").toString().replace(/\D/g,""); }
 function showLoading(msg){ document.getElementById('loadingText').textContent = msg||'Carregando...'; document.getElementById('loadingOverlay').style.display='flex'; }
 function hideLoading(){ document.getElementById('loadingOverlay').style.display='none'; }
 function onError(err){ hideLoading(); alert('Ocorreu um erro: ' + (err && err.message ? err.message : err)); console.error(err); }
+
+// =====================================================================
+// Tema claro/escuro
+// =====================================================================
+function applyTheme(theme){
+  document.documentElement.setAttribute('data-theme', theme);
+  var btn = document.getElementById('themeToggle');
+  if (btn) btn.textContent = theme==='dark' ? '☀️' : '🌙';
+}
+function toggleTheme(){
+  var atual = document.documentElement.getAttribute('data-theme') || 'light';
+  var novo = atual==='dark' ? 'light' : 'dark';
+  applyTheme(novo);
+  try { localStorage.setItem('conciliador_theme', novo); } catch(e){}
+}
+(function initTheme(){
+  var salvo = null;
+  try { salvo = localStorage.getItem('conciliador_theme'); } catch(e){}
+  if (salvo){ applyTheme(salvo); }
+  else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches){ applyTheme('dark'); }
+  else { applyTheme('light'); }
+})();
 
 // =====================================================================
 // 3) Autenticação
@@ -258,9 +343,42 @@ function renderPedidos(){
       '<td>'+p.volume+'</td><td>'+p.impressoDigital+'</td><td>'+p.quantidade+'</td><td>'+p.tipoFaturamento+'</td>'+
       '<td>'+fmtDate(p.criadoEm)+'</td><td>'+(p.numeroNF||'')+'</td>'+
       '<td><span class="pill '+p.status+'">'+statusLabel+'</span></td>'+
-      '<td><button class="btn danger" onclick="removePedido(\''+p.id+'\')">Remover</button></td></tr>';
+      '<td><button class="btn secondary" onclick="openEditPedido(\''+p.id+'\')">Editar</button> '+
+      '<button class="btn danger" onclick="removePedido(\''+p.id+'\')">Remover</button></td></tr>';
   }).join('');
   el.innerHTML = '<table><thead><tr><th>Escola</th><th>Selo</th><th>Código</th><th>Descrição</th><th>Vol.</th><th>Impr/Dig</th><th>Qtd.</th><th>Tipo fat.</th><th>Data de upload</th><th>NF</th><th>Status</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+
+var EDIT_FIELDS = ['idEscola','selo','codigoColecao','descricaoColecao','volume','impressoDigital','quantidade','pedidoInicialExtra','dataPedido','projeto','tipoFaturamento'];
+
+function openEditPedido(id){
+  var p = STATE.pedidos.filter(function(x){ return String(x.id)===String(id); })[0];
+  if (!p) return;
+  document.getElementById('editPedidoModal').dataset.editingId = id;
+  EDIT_FIELDS.forEach(function(f){
+    var el = document.getElementById('edit_'+f);
+    if (el) el.value = p[f] !== undefined && p[f] !== null ? p[f] : '';
+  });
+  document.getElementById('editPedidoModal').style.display = 'flex';
+}
+
+function closeEditModal(){
+  document.getElementById('editPedidoModal').style.display = 'none';
+}
+
+function saveEditPedido(){
+  var id = document.getElementById('editPedidoModal').dataset.editingId;
+  if (!id) return;
+  var updates = {};
+  EDIT_FIELDS.forEach(function(f){
+    var el = document.getElementById('edit_'+f);
+    if (!el) return;
+    updates[f] = f==='quantidade' ? (Number(el.value)||0) : el.value;
+  });
+  showLoading('Salvando...');
+  db.collection('conciliador_pedidos').doc(id).update(updates).then(function(){
+    closeEditModal(); hideLoading();
+  }).catch(onError);
 }
 
 var PEDIDOS_COLUMN_MAP = {
@@ -331,7 +449,7 @@ function renderEscolas(){
   var el = document.getElementById('escolasTable');
   if (STATE.escolas.length===0){ el.innerHTML = '<div class="empty">Nenhuma escola cadastrada ainda.</div>'; return; }
   var rows = STATE.escolas.map(function(e){ return '<tr><td>'+e.idEscola+'</td><td>'+e.cnpj+'</td></tr>'; }).join('');
-  el.innerHTML = '<table><thead><tr><th>ID Escola</th><th>CNPJ</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  el.innerHTML = '<table><thead><tr><th>ID Escola</th><th>CNPJ de faturamento</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
 function addEscolaManual(){
@@ -346,8 +464,6 @@ function addEscolaManual(){
   }).catch(onError);
 }
 
-var ESCOLAS_COLUMN_MAP = { 'id escola':'idEscola','idescola':'idEscola','escola':'idEscola','cnpj':'cnpj' };
-
 function handleEscolasFile(file){
   if (!file) return;
   showLoading('Lendo base de escolas...');
@@ -358,14 +474,14 @@ function handleEscolasFile(file){
       var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
       if (rows.length<2){ hideLoading(); return; }
       var rawHeaders = rows[0].map(function(h){ return normText(h); });
-      var fieldIdx = {};
-      rawHeaders.forEach(function(h,i){ if (ESCOLAS_COLUMN_MAP[h]) fieldIdx[ESCOLAS_COLUMN_MAP[h]] = i; });
+      var idxEscola = rawHeaders.findIndex(function(h){ return h.indexOf('escola')>=0; });
+      var idxCnpj = rawHeaders.findIndex(function(h){ return h.indexOf('cnpj')>=0; });
       var payload = [];
       for (var i=1;i<rows.length;i++){
         var r = rows[i];
         if (!r || r.every(function(c){return c==='' || c==null;})) continue;
-        var idEscola = fieldIdx.idEscola!==undefined ? String(r[fieldIdx.idEscola]||'').trim() : '';
-        var cnpj = fieldIdx.cnpj!==undefined ? String(r[fieldIdx.cnpj]||'').trim() : '';
+        var idEscola = idxEscola>=0 ? String(r[idxEscola]||'').trim() : '';
+        var cnpj = idxCnpj>=0 ? String(r[idxCnpj]||'').trim() : '';
         if (!idEscola) continue;
         payload.push({ idEscola: idEscola, cnpj: cnpj });
       }
