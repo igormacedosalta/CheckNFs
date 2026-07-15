@@ -139,6 +139,7 @@
     <button class="tab" data-tab="escolas" onclick="showTab('escolas')">Escolas (CNPJ)</button>
     <button class="tab" data-tab="depara" onclick="showTab('depara')">De-para SKU</button>
     <button class="tab" data-tab="custos" onclick="showTab('custos')">Custos SKU</button>
+    <button class="tab" data-tab="faturamento" onclick="showTab('faturamento')">De-para Faturamento</button>
     <button class="tab" data-tab="nfs" onclick="showTab('nfs')">Conciliação de NFs</button>
   </div>
 
@@ -221,6 +222,24 @@
     <div class="card"><div id="custosTable"></div></div>
   </div>
 
+  <div id="tab-faturamento" class="tabcontent" style="display:none">
+    <div class="card">
+      <div class="filebox" onclick="document.getElementById('faturamentoFile').click()">Clique para subir a base de de-para de faturamento (.xlsx, .xls ou .csv)</div>
+      <input type="file" id="faturamentoFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleFaturamentoFile(this.files[0])">
+      <div class="hint">Colunas esperadas: Tipo de faturamento na NF, Tipo de faturamento em Pedidos. Isso liga a frase longa que vem no XML (ex: "VENDA DE MERCADORIA...") ao termo curto que vocês usam em Pedidos (ex: "Venda"). Cada upload <strong>substitui</strong> a base inteira.</div>
+      <div id="faturamentoImportWarn"></div>
+      <div class="row" style="margin-top:12px">
+        <div class="field"><label>Tipo de faturamento na NF</label><input id="f_tipoNF" placeholder="VENDA DE MERCADORIA ADQUIRIDA OU RECEBIDA DE TERCEIROS"></div>
+        <div class="field"><label>Tipo de faturamento em Pedidos</label><input id="f_tipoPedido" placeholder="Venda"></div>
+        <button class="btn" onclick="addFaturamentoManual()">Adicionar / atualizar</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row" style="margin-bottom:0"><div class="field" style="min-width:280px"><label>Buscar</label><input id="busca_faturamento" placeholder="Buscar..." oninput="renderFaturamento()"></div></div>
+    </div>
+    <div class="card"><div id="faturamentoTable"></div></div>
+  </div>
+
   <div id="tab-nfs" class="tabcontent" style="display:none">
     <div class="card">
       <div class="filebox" id="nfFilebox" onclick="document.getElementById('nfFile').click()">Clique para selecionar o(s) XML(s) da NF-e (pode selecionar vários de uma vez)</div>
@@ -250,7 +269,7 @@ const db = firebase.firestore();
 // =====================================================================
 // 2) Estado local (mantido em sincronia em tempo real com o Firestore)
 // =====================================================================
-var STATE = { pedidos: [], escolas: [], depara: [], custos: [], nfs: [] };
+var STATE = { pedidos: [], escolas: [], depara: [], custos: [], faturamento: [], nfs: [] };
 var unsubscribers = [];
 
 function fmtMoney(v){ return "R$ " + (Number(v)||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -332,8 +351,8 @@ auth.onAuthStateChanged(function(user){
 // =====================================================================
 function startListeners(){
   showLoading('Carregando base...');
-  var loadedOnce = { e:false, d:false, c:false, n:false };
-  function maybeHide(){ if (loadedOnce.e && loadedOnce.d && loadedOnce.c && loadedOnce.n) { hideLoading(); renderPedidos(); refreshSummary(); } }
+  var loadedOnce = { e:false, d:false, c:false, f:false, n:false };
+  function maybeHide(){ if (loadedOnce.e && loadedOnce.d && loadedOnce.c && loadedOnce.f && loadedOnce.n) { hideLoading(); renderPedidos(); refreshSummary(); } }
 
   // NFs: limitado às mais recentes para não crescer sem controle com o tempo
   unsubscribers.push(db.collection('conciliador_nfs').orderBy('processadoEm','desc').limit(1000).onSnapshot(function(snap){
@@ -355,10 +374,15 @@ function startListeners(){
     STATE.custos = doc.exists ? (doc.data().lista||[]) : [];
     loadedOnce.c = true; renderCustos(); maybeHide();
   }, onError));
+
+  unsubscribers.push(db.doc('conciliador_reference/faturamento').onSnapshot(function(doc){
+    STATE.faturamento = doc.exists ? (doc.data().lista||[]) : [];
+    loadedOnce.f = true; renderFaturamento(); maybeHide();
+  }, onError));
 }
 
 function showTab(name){
-  ['pedidos','escolas','depara','custos','nfs'].forEach(function(t){
+  ['pedidos','escolas','depara','custos','faturamento','nfs'].forEach(function(t){
     document.getElementById('tab-'+t).style.display = (t===name)?'block':'none';
     document.querySelector('.tab[data-tab="'+t+'"]').classList.toggle('active', t===name);
   });
@@ -912,6 +936,83 @@ function handleCustosFile(file){
 }
 
 // =====================================================================
+// 7c) De-para de Faturamento (traduz o natOp da NF para o termo usado em Pedidos)
+// =====================================================================
+function renderFaturamento(){
+  var el = document.getElementById('faturamentoTable');
+  var busca = normText(document.getElementById('busca_faturamento') ? document.getElementById('busca_faturamento').value : '');
+  var filtrados = STATE.faturamento.filter(function(f){
+    return !busca || normText(f.tipoNF).indexOf(busca)>=0 || normText(f.tipoPedido).indexOf(busca)>=0;
+  });
+  if (filtrados.length===0){ el.innerHTML = '<div class="empty">'+(STATE.faturamento.length===0?'Nenhum de-para de faturamento cadastrado ainda.':'Nenhum resultado encontrado para essa busca.')+'</div>'; return; }
+  var rows = filtrados.map(function(f){
+    return '<tr><td>'+f.tipoNF+'</td><td>'+f.tipoPedido+'</td></tr>';
+  }).join('');
+  el.innerHTML = '<table><thead><tr><th>Tipo de faturamento na NF</th><th>Tipo de faturamento em Pedidos</th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+
+function addFaturamentoManual(){
+  var tipoNF = document.getElementById('f_tipoNF').value;
+  var tipoPedido = document.getElementById('f_tipoPedido').value;
+  if (!tipoNF || !tipoPedido) return;
+  var novaLista = STATE.faturamento.filter(function(f){ return normText(f.tipoNF)!==normText(tipoNF); });
+  novaLista.push({ tipoNF: tipoNF, tipoPedido: capitalizarPrimeira(tipoPedido) });
+  showLoading('Salvando...');
+  db.doc('conciliador_reference/faturamento').set({lista: novaLista}).then(function(){
+    document.getElementById('f_tipoNF').value=''; document.getElementById('f_tipoPedido').value=''; hideLoading();
+  }).catch(onError);
+}
+
+function handleFaturamentoFile(file){
+  if (!file) return;
+  showLoading('Lendo base de de-para de faturamento...');
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+      if (rows.length<2){ hideLoading(); return; }
+      var rawHeaders = rows[0].map(function(h){ return normText(h); });
+      var idx = {
+        tipoNF: rawHeaders.findIndex(function(h){ return h.indexOf('faturamento')>=0 && (h.indexOf(' nf')>=0 || h.indexOf('xml')>=0 || h==='faturamento nf' || h.indexOf('natop')>=0); }),
+        tipoPedido: rawHeaders.findIndex(function(h){ return h.indexOf('faturamento')>=0 && h.indexOf('pedido')>=0; }),
+      };
+      // fallback: se só houver 2 colunas com "faturamento", assume a 1ª = NF e a 2ª = Pedidos
+      if (idx.tipoNF<0 || idx.tipoPedido<0){
+        var candidatas = [];
+        rawHeaders.forEach(function(h,i){ if (h.indexOf('faturamento')>=0) candidatas.push(i); });
+        if (candidatas.length>=2){ idx.tipoNF = candidatas[0]; idx.tipoPedido = candidatas[1]; }
+      }
+      var naoReconhecidas = rows[0].filter(function(h,i){ return h && idx.tipoNF!==i && idx.tipoPedido!==i; });
+      var avisoEl = document.getElementById('faturamentoImportWarn');
+      if (avisoEl) avisoEl.innerHTML = naoReconhecidas.length ? '<div class="warn">Colunas não reconhecidas (ignoradas): '+naoReconhecidas.join(', ')+'</div>' : '';
+
+      var payload = [];
+      for (var i=1;i<rows.length;i++){
+        var r = rows[i];
+        if (!r || r.every(function(c){return c==='' || c==null;})) continue;
+        var tipoNF = idx.tipoNF>=0 ? String(r[idx.tipoNF]||'').trim() : '';
+        var tipoPedido = idx.tipoPedido>=0 ? String(r[idx.tipoPedido]||'').trim() : '';
+        if (!tipoNF || !tipoPedido) continue;
+        payload.push({ tipoNF: tipoNF, tipoPedido: capitalizarPrimeira(tipoPedido) });
+      }
+      db.doc('conciliador_reference/faturamento').set({lista: payload}).then(function(){
+        document.getElementById('faturamentoFile').value=''; hideLoading();
+        if (payload.length===0) alert('Nenhuma linha válida encontrada. Confira se as duas colunas de faturamento estão preenchidas.');
+      }).catch(onError);
+    } catch(err){ onError(err); }
+  };
+  reader.onerror = function(){ hideLoading(); alert('Não consegui ler o arquivo.'); };
+  reader.readAsArrayBuffer(file);
+}
+
+// Traduz o natOp da NF (frase longa/legal) para o termo curto usado em Pedidos, via a base de-para acima.
+// Se não achar mapeamento, devolve o próprio natOp (mantém o comportamento antigo como fallback).
+function traduzirTipoFaturamento(natOp, faturamentoMap){
+  var row = (faturamentoMap||[]).filter(function(f){ return normText(f.tipoNF)===normText(natOp); })[0];
+  return row ? row.tipoPedido : natOp;
+}
+// =====================================================================
 // 8) Parsing de XML da NF-e (via DOMParser do navegador)
 // =====================================================================
 function parseNFeXML(xmlText){
@@ -977,7 +1078,7 @@ function getRemaining(pedido, depara, custos){
   });
   return remaining;
 }
-function matchNF(nf, candidatesInput, depara, custos){
+function matchNF(nf, candidatesInput, depara, custos, faturamentoMap){
   var candidates = candidatesInput.slice().sort(function(a,b){ return new Date(a.criadoEm||0) - new Date(b.criadoEm||0); });
   if (candidates.length===0){
     return { status:'pendente', motivo:'Nenhum pedido em aberto encontrado para o CNPJ desta escola. Vincule manualmente.', pedidosAfetados:{}, custoEsperado:0 };
@@ -1016,9 +1117,12 @@ function matchNF(nf, candidatesInput, depara, custos){
   var pedidosEnvolvidos = Object.keys(alocacoes);
   var desvio = Math.abs(custoEsperado - nf.vNF);
   var tolerancia = 10;
-  var tipoBate = candidates.some(function(p){ return pedidosEnvolvidos.indexOf(String(p.id))!==-1 && normText(p.tipoFaturamento)===normText(nf.natOp); });
+  var tipoTraduzido = traduzirTipoFaturamento(nf.natOp, faturamentoMap);
+  var tipoBate = candidates.some(function(p){ return pedidosEnvolvidos.indexOf(String(p.id))!==-1 && normText(p.tipoFaturamento)===normText(tipoTraduzido); });
   if (!tipoBate){
-    return { status:'erro', motivo:'Tipo de faturamento da NF ("'+nf.natOp+'") não confere com o(s) pedido(s) vinculado(s).', pedidosAfetados:alocacoes, custoEsperado:custoEsperado };
+    var temMapeamento = (faturamentoMap||[]).some(function(f){ return normText(f.tipoNF)===normText(nf.natOp); });
+    var dica = temMapeamento ? '' : ' Não há de-para cadastrado para esse texto — confira a aba "De-para Faturamento".';
+    return { status:'erro', motivo:'Tipo de faturamento da NF ("'+nf.natOp+'" → "'+tipoTraduzido+'") não confere com o(s) pedido(s) vinculado(s).'+dica, pedidosAfetados:alocacoes, custoEsperado:custoEsperado };
   }
   if (desvio > tolerancia){
     return { status:'erro', motivo:'Custo divergente: esperado '+fmtMoney(custoEsperado)+', NF veio com '+fmtMoney(nf.vNF)+' (diferença de '+fmtMoney(desvio)+').', pedidosAfetados:alocacoes, custoEsperado:custoEsperado };
@@ -1101,7 +1205,7 @@ function processNext(files, i){
       var nf = parseNFeXML(e.target.result);
       var idsEscola = getIdsEscolaPorCNPJ(nf.cnpjDest);
       buscarCandidatosPorEscolas(idsEscola).then(function(candidates){
-        var result = matchNF(nf, candidates, STATE.depara, STATE.custos);
+        var result = matchNF(nf, candidates, STATE.depara, STATE.custos, STATE.faturamento);
         Object.assign(record, {
           chave: nf.chave, numeroNF: nf.numeroNF, cnpjDest: nf.cnpjDest, nomeDest: nf.nomeDest,
           cnpjEmit: nf.cnpjEmit, nomeEmit: nf.nomeEmit, natOp: nf.natOp, vNF: nf.vNF, infCpl: nf.infCpl,
@@ -1221,7 +1325,7 @@ function vincularManual(nfId, pedidoId){
   var pedido = (vincCandidatosCache[nfId]||[]).filter(function(p){ return String(p.id)===String(pedidoId); })[0];
   if (!nfRow || !pedido){ hideLoading(); return; }
   var nf = { natOp: nfRow.natOp, vNF: nfRow.vNF, itens: nfRow.itens, numeroNF: nfRow.numeroNF };
-  var result = matchNF(nf, [pedido], STATE.depara, STATE.custos);
+  var result = matchNF(nf, [pedido], STATE.depara, STATE.custos, STATE.faturamento);
   var afterMatch = result.status==='conciliada' ? applyAllocationsToPedidos(result.pedidosAfetados, [pedido], STATE.depara, STATE.custos, nf.numeroNF) : Promise.resolve();
   afterMatch.then(function(){
     return db.collection('conciliador_nfs').doc(nfId).update({
