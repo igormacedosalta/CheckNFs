@@ -150,6 +150,15 @@
       <div id="pedidosImportWarn"></div>
       <div class="row" style="margin-top:12px"><button class="btn danger" onclick="clearPedidos()">Zerar base de pedidos</button></div>
     </div>
+    <div class="card">
+      <div class="row" style="margin-bottom:0">
+        <div class="field"><label>Escola</label><select id="filtro_escola" onchange="renderPedidos()"><option value="">Todas</option></select></div>
+        <div class="field"><label>Selo</label><select id="filtro_selo" onchange="renderPedidos()"><option value="">Todos</option></select></div>
+        <div class="field"><label>Coleção</label><select id="filtro_colecao" onchange="renderPedidos()"><option value="">Todas</option></select></div>
+        <div class="field"><label>Volume</label><select id="filtro_volume" onchange="renderPedidos()"><option value="">Todos</option></select></div>
+        <button class="btn secondary" onclick="limparFiltrosPedidos()">Limpar filtros</button>
+      </div>
+    </div>
     <div class="card"><div id="pedidosTable"></div></div>
   </div>
 
@@ -348,10 +357,52 @@ function renderSummary(){
 // =====================================================================
 // 5) Pedidos
 // =====================================================================
+function getSeloForColecao(colecao){
+  var row = STATE.depara.filter(function(d){ return normText(d.colecao)===normText(colecao); })[0];
+  return row ? row.selo : '';
+}
+
+function populateFiltroSelect(id, values, allLabel){
+  var el = document.getElementById(id);
+  var atual = el.value;
+  var unicos = Array.from(new Set(values.filter(Boolean))).sort(function(a,b){ return normText(a).localeCompare(normText(b)); });
+  el.innerHTML = '<option value="">'+allLabel+'</option>' + unicos.map(function(v){ return '<option value="'+v+'">'+v+'</option>'; }).join('');
+  if (unicos.indexOf(atual)>=0) el.value = atual;
+}
+
+function limparFiltrosPedidos(){
+  ['filtro_escola','filtro_selo','filtro_colecao','filtro_volume'].forEach(function(id){ document.getElementById(id).value=''; });
+  renderPedidos();
+}
+
 function renderPedidos(){
   var el = document.getElementById('pedidosTable');
   if (STATE.pedidos.length===0){ el.innerHTML = '<div class="empty">Nenhum pedido cadastrado ainda.</div>'; return; }
-  var rows = STATE.pedidos.map(function(p){
+
+  var comSelo = STATE.pedidos.map(function(p){ return Object.assign({}, p, { selo: getSeloForColecao(p.colecao) }); });
+
+  populateFiltroSelect('filtro_escola', comSelo.map(function(p){return p.idEscola;}), 'Todas');
+  populateFiltroSelect('filtro_selo', comSelo.map(function(p){return p.selo;}), 'Todos');
+  populateFiltroSelect('filtro_colecao', comSelo.map(function(p){return p.colecao;}), 'Todas');
+  populateFiltroSelect('filtro_volume', comSelo.map(function(p){return p.volume;}), 'Todos');
+
+  var fEscola = document.getElementById('filtro_escola').value;
+  var fSelo = document.getElementById('filtro_selo').value;
+  var fColecao = document.getElementById('filtro_colecao').value;
+  var fVolume = document.getElementById('filtro_volume').value;
+
+  var filtrados = comSelo.filter(function(p){
+    return (!fEscola || p.idEscola===fEscola)
+      && (!fSelo || p.selo===fSelo)
+      && (!fColecao || p.colecao===fColecao)
+      && (!fVolume || String(p.volume)===String(fVolume));
+  });
+
+  if (filtrados.length===0){ el.innerHTML = '<div class="empty">Nenhum pedido encontrado para esse filtro.</div>'; return; }
+
+  var totalQtd = filtrados.reduce(function(acc,p){ return acc + (Number(p.quantidade)||0); }, 0);
+
+  var rows = filtrados.map(function(p){
     var statusLabel = p.status==='aberto'?'Aberto':p.status==='parcial'?'Parcial':'Concluído';
     return '<tr><td>'+p.idEscola+'</td><td>'+p.colecao+'</td><td>'+p.volume+'</td><td>'+p.quantidade+'</td>'+
       '<td>'+p.dataPedido+'</td><td>'+p.projeto+'</td><td>'+p.tipoFaturamento+'</td>'+
@@ -360,7 +411,9 @@ function renderPedidos(){
       '<td><button class="btn secondary" onclick="openEditPedido(\''+p.id+'\')">Editar</button> '+
       '<button class="btn danger" onclick="removePedido(\''+p.id+'\')">Remover</button></td></tr>';
   }).join('');
-  el.innerHTML = '<table><thead><tr><th>Escola</th><th>Coleção</th><th>Vol.</th><th>Qtd.</th><th>Data do pedido</th><th>Projeto?</th><th>Tipo fat.</th><th>Data de upload</th><th>NF</th><th>Status</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+  var totalRow = '<tr><td colspan="3" style="text-align:right;font-weight:600;">Total (filtro atual):</td>'+
+    '<td style="font-weight:600;">'+totalQtd+'</td><td colspan="7"></td></tr>';
+  el.innerHTML = '<table><thead><tr><th>Escola</th><th>Coleção</th><th>Vol.</th><th>Qtd.</th><th>Data do pedido</th><th>Projeto?</th><th>Tipo fat.</th><th>Data de upload</th><th>NF</th><th>Status</th><th></th></tr></thead><tbody>'+rows+totalRow+'</tbody></table>';
 }
 
 var EDIT_FIELDS = ['idEscola','colecao','volume','quantidade','dataPedido','projeto','tipoFaturamento'];
@@ -401,6 +454,25 @@ var PEDIDOS_COLUMN_MAP = {
   'projeto':'projeto','tipo de faturamento':'tipoFaturamento',
 };
 
+// Grava/apaga em lotes menores para não estourar o limite de tamanho/quantidade do Firestore por lote
+function commitInChunks(items, applyToBatch, chunkSize, onProgress){
+  chunkSize = chunkSize || 400;
+  var chunks = [];
+  for (var i=0;i<items.length;i+=chunkSize) chunks.push(items.slice(i, i+chunkSize));
+  var done = 0;
+  function next(idx){
+    if (idx>=chunks.length) return Promise.resolve();
+    var batch = db.batch();
+    chunks[idx].forEach(function(item){ applyToBatch(batch, item); });
+    return batch.commit().then(function(){
+      done += chunks[idx].length;
+      if (onProgress) onProgress(done, items.length);
+      return next(idx+1);
+    });
+  }
+  return next(0);
+}
+
 function handlePedidosFile(file){
   if (!file) return;
   showLoading('Lendo base de pedidos...');
@@ -416,8 +488,7 @@ function handlePedidosFile(file){
       var naoReconhecidas = rows[0].filter(function(h,i){ return h && !PEDIDOS_COLUMN_MAP[rawHeaders[i]]; });
       document.getElementById('pedidosImportWarn').innerHTML = naoReconhecidas.length ? '<div class="warn">Colunas não reconhecidas (ignoradas): '+naoReconhecidas.join(', ')+'</div>' : '';
 
-      var batch = db.batch();
-      var count = 0;
+      var objetos = [];
       for (var i=1;i<rows.length;i++){
         var r = rows[i];
         if (!r || r.every(function(c){return c==='' || c==null;})) continue;
@@ -426,12 +497,13 @@ function handlePedidosFile(file){
         if (!idEscola || !colecao) continue;
         var obj = { status:'aberto', recebido:{}, criadoEm: new Date().toISOString(), numeroNF:'' };
         Object.keys(fieldIdx).forEach(function(field){ obj[field] = r[fieldIdx[field]]; });
-        var ref = db.collection('conciliador_pedidos').doc();
-        batch.set(ref, obj);
-        count++;
+        objetos.push(obj);
       }
-      if (count===0){ hideLoading(); return; }
-      batch.commit().then(hideLoading).catch(onError);
+      if (objetos.length===0){ hideLoading(); return; }
+      commitInChunks(objetos, function(batch, obj){
+        batch.set(db.collection('conciliador_pedidos').doc(), obj);
+      }, 400, function(done, total){ showLoading('Salvando pedidos... ('+done+'/'+total+')'); })
+        .then(hideLoading).catch(onError);
       document.getElementById('pedidosFile').value='';
     } catch(err){ onError(err); }
   };
@@ -448,9 +520,8 @@ function clearPedidos(){
   if (!confirm('Isso vai apagar TODOS os pedidos cadastrados na base, sem volta. Tem certeza?')) return;
   showLoading('Zerando base de pedidos...');
   db.collection('conciliador_pedidos').get().then(function(snap){
-    var batch = db.batch();
-    snap.docs.forEach(function(d){ batch.delete(d.ref); });
-    return batch.commit();
+    return commitInChunks(snap.docs, function(batch, doc){ batch.delete(doc.ref); }, 400,
+      function(done, total){ showLoading('Zerando base de pedidos... ('+done+'/'+total+')'); });
   }).then(hideLoading).catch(onError);
 }
 
