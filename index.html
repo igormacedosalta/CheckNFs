@@ -1078,8 +1078,16 @@ function getRemaining(pedido, depara, custos){
   });
   return remaining;
 }
+// Ordem para decidir qual pedido "consumir" primeiro: prioriza a Data do pedido real
+// (a mais antiga primeiro); se não der pra interpretar essa data, usa a data de upload como último recurso.
+function ordemDoPedido(p){
+  var d = parseBRDate(p.dataPedido);
+  if (d) return d.getTime();
+  return new Date(p.criadoEm||0).getTime();
+}
+
 function matchNF(nf, candidatesInput, depara, custos, faturamentoMap){
-  var candidates = candidatesInput.slice().sort(function(a,b){ return new Date(a.criadoEm||0) - new Date(b.criadoEm||0); });
+  var candidates = candidatesInput.slice().sort(function(a,b){ return ordemDoPedido(a) - ordemDoPedido(b); });
   if (candidates.length===0){
     return { status:'pendente', motivo:'Nenhum pedido em aberto encontrado para o CNPJ desta escola. Vincule manualmente.', pedidosAfetados:{}, custoEsperado:0 };
   }
@@ -1095,6 +1103,19 @@ function matchNF(nf, candidatesInput, depara, custos, faturamentoMap){
   var alocacoes = {};
   nf.itens.forEach(function(item){
     var restante = item.quantidade;
+    // 1) Prioridade: existe um único pedido com sobra EXATAMENTE igual à quantidade da NF?
+    //    Isso preserva o vínculo com o pedido "certo" quando ele existe, em vez de sempre consumir o mais antigo.
+    var candidatoExato = candidates.filter(function(p){
+      var rem = remainingByPedido[p.id][item.sku];
+      return rem && Math.abs(rem.qty - item.quantidade) < 0.0001;
+    })[0];
+    if (candidatoExato){
+      alocacoes[candidatoExato.id] = alocacoes[candidatoExato.id] || {};
+      alocacoes[candidatoExato.id][item.sku] = (alocacoes[candidatoExato.id][item.sku]||0) + item.quantidade;
+      remainingByPedido[candidatoExato.id][item.sku].qty = 0;
+      restante = 0;
+    }
+    // 2) Sem match exato: cai no consumo do pedido mais antigo primeiro (FIFO), podendo dividir entre vários
     for (var i=0;i<candidates.length;i++){
       if (restante<=0.0001) break;
       var p = candidates[i];
