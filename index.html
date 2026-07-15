@@ -152,12 +152,12 @@
     </div>
     <div class="card">
       <div class="row" style="margin-bottom:0">
-        <div class="field"><label>Escola</label><select id="filtro_escola" onchange="renderPedidos()"><option value="">Todas</option></select></div>
-        <div class="field"><label>Selo</label><select id="filtro_selo" onchange="renderPedidos()"><option value="">Todos</option></select></div>
-        <div class="field"><label>Coleção</label><select id="filtro_colecao" onchange="renderPedidos()"><option value="">Todas</option></select></div>
-        <div class="field"><label>Volume</label><select id="filtro_volume" onchange="renderPedidos()"><option value="">Todos</option></select></div>
+        <div class="field"><label>Escola</label><select id="filtro_escola" onchange="onEscolaFiltroChange()"><option value="">Selecionar escola</option></select></div>
+        <div class="field"><label>Selo</label><select id="filtro_selo" onchange="renderPedidosFromCache()"><option value="">Todos</option></select></div>
+        <div class="field"><label>Coleção</label><input id="filtro_colecao" list="colecao_datalist" placeholder="Digite para buscar..." oninput="renderPedidosFromCache()"><datalist id="colecao_datalist"></datalist></div>
+        <div class="field"><label>Volume</label><select id="filtro_volume" onchange="renderPedidosFromCache()"><option value="">Todos</option></select></div>
         <button class="btn secondary" onclick="limparFiltrosPedidos()">Limpar filtros</button>
-        <button class="btn secondary" onclick="renderPedidos()" title="Os pedidos não atualizam sozinhos em tempo real (para economizar leituras) — clique para buscar de novo">Atualizar</button>
+        <button class="btn secondary" onclick="onEscolaFiltroChange()" title="Os pedidos não atualizam sozinhos em tempo real (para economizar leituras) — clique para buscar de novo">Atualizar</button>
       </div>
       <div class="hint">Por economia de leituras, essa lista não fica ao vivo — clique em "Atualizar" para buscar as mudanças mais recentes.</div>
     </div>
@@ -391,79 +391,98 @@ function populateFiltroSelect(id, values, allLabel){
 }
 
 function limparFiltrosPedidos(){
-  ['filtro_escola','filtro_selo','filtro_colecao','filtro_volume'].forEach(function(id){ document.getElementById(id).value=''; });
-  renderPedidos();
+  document.getElementById('filtro_escola').value = '';
+  onEscolaFiltroChange();
 }
 
-function populateFiltrosDeReferencia(){
-  populateFiltroSelect('filtro_escola', STATE.escolas.map(function(e){return e.idEscola;}), 'Todas');
-  populateFiltroSelect('filtro_selo', STATE.depara.map(function(d){return d.selo;}), 'Todos');
-  populateFiltroSelect('filtro_colecao', STATE.depara.map(function(d){return d.colecao;}), 'Todas');
-  populateFiltroSelect('filtro_volume', STATE.depara.map(function(d){return d.volume;}), 'Todos');
+function popularFiltroEscolas(){
+  populateFiltroSelect('filtro_escola', STATE.escolas.map(function(e){return e.idEscola;}), 'Selecionar escola');
 }
 
+var escolaPedidosCache = [];
 var LIMITE_LINHAS_PEDIDOS = 300;
 
-function renderPedidos(){
-  populateFiltrosDeReferencia();
+function onEscolaFiltroChange(){
+  document.getElementById('filtro_selo').value = '';
+  document.getElementById('filtro_colecao').value = '';
+  document.getElementById('filtro_volume').value = '';
+  var idEscola = document.getElementById('filtro_escola').value;
   var el = document.getElementById('pedidosTable');
-  el.innerHTML = '<div class="empty">Buscando pedidos...</div>';
-
-  var fEscola = document.getElementById('filtro_escola').value;
-  var fSelo = document.getElementById('filtro_selo').value;
-  var fColecao = document.getElementById('filtro_colecao').value;
-  var fVolume = document.getElementById('filtro_volume').value;
-  var semFiltro = !fEscola && !fSelo && !fColecao && !fVolume;
-
-  var query = db.collection('conciliador_pedidos');
-  if (fEscola) query = query.where('idEscola','==',fEscola);
-  if (fColecao) query = query.where('colecao','==',fColecao);
-  if (fVolume) query = query.where('volume','==',fVolume);
-  if (fSelo && !fColecao){
-    var colecoesDoSelo = Array.from(new Set(STATE.depara.filter(function(d){return d.selo===fSelo;}).map(function(d){return d.colecao;})));
-    if (colecoesDoSelo.length===0){ el.innerHTML = '<div class="empty">Nenhuma coleção encontrada para esse selo no De-para.</div>'; return; }
-    if (colecoesDoSelo.length>30){
-      el.innerHTML = '<div class="empty">Esse selo tem coleções demais para filtrar de uma vez (limite técnico de 30). Filtre também por Coleção.</div>'; return;
-    }
-    query = query.where('colecao','in',colecoesDoSelo);
+  if (!idEscola){
+    escolaPedidosCache = [];
+    document.getElementById('filtro_selo').innerHTML = '<option value="">Todos</option>';
+    document.getElementById('filtro_volume').innerHTML = '<option value="">Todos</option>';
+    document.getElementById('colecao_datalist').innerHTML = '';
+    el.innerHTML = '<div class="empty">Selecione uma escola acima para ver os pedidos dela.</div>';
+    return;
   }
-  if (semFiltro) query = query.orderBy('criadoEm','desc').limit(LIMITE_LINHAS_PEDIDOS);
-  else query = query.limit(2000);
-
-  query.get().then(function(snap){
-    var pedidos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
-    STATE.pedidos = pedidos;
-
-    if (pedidos.length===0){ el.innerHTML = '<div class="empty">Nenhum pedido encontrado para esse filtro.</div>'; return; }
-
-    var totalQtd = pedidos.reduce(function(acc,p){ return acc + (Number(p.quantidade)||0); }, 0);
-    var ordenados = pedidos.slice().sort(function(a,b){ return new Date(b.criadoEm||0) - new Date(a.criadoEm||0); });
-    var visiveis = ordenados.slice(0, LIMITE_LINHAS_PEDIDOS);
-
-    var aviso = '';
-    if (semFiltro){
-      aviso = '<div class="warn">Sem filtro selecionado: mostrando só os '+LIMITE_LINHAS_PEDIDOS+' pedidos mais recentes (o total abaixo reflete só esses, não a base inteira). Use um filtro para ver o total exato de um recorte.</div>';
-    } else if (ordenados.length > LIMITE_LINHAS_PEDIDOS){
-      aviso = '<div class="warn">Mostrando '+LIMITE_LINHAS_PEDIDOS+' de '+ordenados.length+' pedidos encontrados (mais recentes primeiro), mas o total abaixo já soma todos os '+ordenados.length+'.</div>';
-    }
-
-    var rows = visiveis.map(function(p){
-      var statusLabel = p.status==='aberto'?'Aberto':p.status==='parcial'?'Parcial':'Concluído';
-      return '<tr><td>'+p.idEscola+'</td><td>'+p.colecao+'</td><td>'+p.volume+'</td><td>'+p.quantidade+'</td>'+
-        '<td>'+p.dataPedido+'</td><td>'+p.projeto+'</td><td>'+p.tipoFaturamento+'</td>'+
-        '<td>'+fmtDate(p.criadoEm)+'</td><td>'+(p.numeroNF||'')+'</td>'+
-        '<td><span class="pill '+p.status+'">'+statusLabel+'</span></td>'+
-        '<td><button class="btn secondary" onclick="openEditPedido(\''+p.id+'\')">Editar</button> '+
-        '<button class="btn danger" onclick="removePedido(\''+p.id+'\')">Remover</button></td></tr>';
-    }).join('');
-    var totalLabel = semFiltro ? 'Total (só os exibidos)' : 'Total (filtro atual, '+ordenados.length+' pedido(s))';
-    var totalRow = '<tr><td colspan="3" style="text-align:right;font-weight:600;">'+totalLabel+':</td>'+
-      '<td style="font-weight:600;">'+totalQtd+'</td><td colspan="7"></td></tr>';
-    el.innerHTML = aviso + '<table><thead><tr><th>Escola</th><th>Coleção</th><th>Vol.</th><th>Qtd.</th><th>Data do pedido</th><th>Projeto?</th><th>Tipo fat.</th><th>Data de upload</th><th>NF</th><th>Status</th><th></th></tr></thead><tbody>'+rows+totalRow+'</tbody></table>';
+  el.innerHTML = '<div class="empty">Buscando pedidos da escola...</div>';
+  db.collection('conciliador_pedidos').where('idEscola','==',idEscola).get().then(function(snap){
+    escolaPedidosCache = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); })
+      .map(function(p){ return Object.assign({}, p, { selo: getSeloForColecao(p.colecao) }); });
+    popularSubFiltros();
+    renderPedidosFromCache();
   }).catch(function(err){
     el.innerHTML = '<div class="empty">Erro ao buscar pedidos: '+err.message+'</div>';
     console.error(err);
   });
+}
+
+function popularSubFiltros(){
+  populateFiltroSelect('filtro_selo', escolaPedidosCache.map(function(p){return p.selo;}), 'Todos');
+  populateFiltroSelect('filtro_volume', escolaPedidosCache.map(function(p){return p.volume;}), 'Todos');
+  var colecoes = Array.from(new Set(escolaPedidosCache.map(function(p){return p.colecao;}).filter(Boolean)))
+    .sort(function(a,b){ return normText(a).localeCompare(normText(b)); });
+  document.getElementById('colecao_datalist').innerHTML = colecoes.map(function(c){ return '<option value="'+c+'">'; }).join('');
+}
+
+function renderPedidosFromCache(){
+  var el = document.getElementById('pedidosTable');
+  if (!document.getElementById('filtro_escola').value){
+    el.innerHTML = '<div class="empty">Selecione uma escola acima para ver os pedidos dela.</div>';
+    return;
+  }
+  var fSelo = document.getElementById('filtro_selo').value;
+  var fColecaoTexto = normText(document.getElementById('filtro_colecao').value);
+  var fVolume = document.getElementById('filtro_volume').value;
+
+  var filtrados = escolaPedidosCache.filter(function(p){
+    return (!fSelo || p.selo===fSelo)
+      && (!fColecaoTexto || normText(p.colecao).indexOf(fColecaoTexto)>=0)
+      && (!fVolume || String(p.volume)===String(fVolume));
+  });
+
+  STATE.pedidos = filtrados;
+
+  if (filtrados.length===0){ el.innerHTML = '<div class="empty">Nenhum pedido encontrado para esse filtro.</div>'; return; }
+
+  var totalQtd = filtrados.reduce(function(acc,p){ return acc + (Number(p.quantidade)||0); }, 0);
+  var ordenados = filtrados.slice().sort(function(a,b){ return new Date(b.criadoEm||0) - new Date(a.criadoEm||0); });
+  var visiveis = ordenados.slice(0, LIMITE_LINHAS_PEDIDOS);
+
+  var aviso = ordenados.length > LIMITE_LINHAS_PEDIDOS
+    ? '<div class="warn">Mostrando '+LIMITE_LINHAS_PEDIDOS+' de '+ordenados.length+' pedidos (mais recentes primeiro), mas o total abaixo já soma todos os '+ordenados.length+'.</div>'
+    : '';
+
+  var rows = visiveis.map(function(p){
+    var statusLabel = p.status==='aberto'?'Aberto':p.status==='parcial'?'Parcial':'Concluído';
+    return '<tr><td>'+p.idEscola+'</td><td>'+p.colecao+'</td><td>'+p.volume+'</td><td>'+p.quantidade+'</td>'+
+      '<td>'+p.dataPedido+'</td><td>'+p.projeto+'</td><td>'+p.tipoFaturamento+'</td>'+
+      '<td>'+fmtDate(p.criadoEm)+'</td><td>'+(p.numeroNF||'')+'</td>'+
+      '<td><span class="pill '+p.status+'">'+statusLabel+'</span></td>'+
+      '<td><button class="btn secondary" onclick="openEditPedido(\''+p.id+'\')">Editar</button> '+
+      '<button class="btn danger" onclick="removePedido(\''+p.id+'\')">Remover</button></td></tr>';
+  }).join('');
+  var totalRow = '<tr><td colspan="3" style="text-align:right;font-weight:600;">Total (filtro atual, '+ordenados.length+' pedido(s)):</td>'+
+    '<td style="font-weight:600;">'+totalQtd+'</td><td colspan="7"></td></tr>';
+  el.innerHTML = aviso + '<table><thead><tr><th>Escola</th><th>Coleção</th><th>Vol.</th><th>Qtd.</th><th>Data do pedido</th><th>Projeto?</th><th>Tipo fat.</th><th>Data de upload</th><th>NF</th><th>Status</th><th></th></tr></thead><tbody>'+rows+totalRow+'</tbody></table>';
+}
+
+// Chamada após uploads/edições/remoções: repopula o seletor de escolas e, se uma já estiver escolhida, busca de novo
+function renderPedidos(){
+  popularFiltroEscolas();
+  if (document.getElementById('filtro_escola').value) onEscolaFiltroChange();
+  else document.getElementById('pedidosTable').innerHTML = '<div class="empty">Selecione uma escola acima para ver os pedidos dela.</div>';
 }
 
 var EDIT_FIELDS = ['idEscola','colecao','volume','quantidade','dataPedido','projeto','tipoFaturamento'];
