@@ -1107,11 +1107,16 @@ function matchNF(nf, candidatesInput, depara, custos, faturamentoMap){
     }
   });
   var custoEsperado = 0;
+  var detalheCusto = [];
   Object.keys(alocacoes).forEach(function(pedidoId){
     var pedido = candidates.filter(function(p){ return String(p.id)===String(pedidoId); })[0];
     if (!pedido) return;
     Object.keys(alocacoes[pedidoId]).forEach(function(sku){
-      custoEsperado += alocacoes[pedidoId][sku] * getCustoForPedidoSku(pedido, sku, custos);
+      var qtd = alocacoes[pedidoId][sku];
+      var preco = getCustoForPedidoSku(pedido, sku, custos);
+      var subtotal = qtd * preco;
+      custoEsperado += subtotal;
+      detalheCusto.push({ sku: sku, colecao: pedido.colecao, volume: pedido.volume, quantidade: qtd, preco: preco, subtotal: subtotal });
     });
   });
   var pedidosEnvolvidos = Object.keys(alocacoes);
@@ -1122,12 +1127,12 @@ function matchNF(nf, candidatesInput, depara, custos, faturamentoMap){
   if (!tipoBate){
     var temMapeamento = (faturamentoMap||[]).some(function(f){ return normText(f.tipoNF)===normText(nf.natOp); });
     var dica = temMapeamento ? '' : ' Não há de-para cadastrado para esse texto — confira a aba "De-para Faturamento".';
-    return { status:'erro', motivo:'Tipo de faturamento da NF ("'+nf.natOp+'" → "'+tipoTraduzido+'") não confere com o(s) pedido(s) vinculado(s).'+dica, pedidosAfetados:alocacoes, custoEsperado:custoEsperado };
+    return { status:'erro', motivo:'Tipo de faturamento da NF ("'+nf.natOp+'" → "'+tipoTraduzido+'") não confere com o(s) pedido(s) vinculado(s).'+dica, pedidosAfetados:alocacoes, custoEsperado:custoEsperado, detalheCusto:detalheCusto };
   }
   if (desvio > tolerancia){
-    return { status:'erro', motivo:'Custo divergente: esperado '+fmtMoney(custoEsperado)+', NF veio com '+fmtMoney(nf.vNF)+' (diferença de '+fmtMoney(desvio)+').', pedidosAfetados:alocacoes, custoEsperado:custoEsperado };
+    return { status:'erro', motivo:'Custo divergente: esperado '+fmtMoney(custoEsperado)+', NF veio com '+fmtMoney(nf.vNF)+' (diferença de '+fmtMoney(desvio)+').', pedidosAfetados:alocacoes, custoEsperado:custoEsperado, detalheCusto:detalheCusto };
   }
-  return { status:'conciliada', motivo:'', pedidosAfetados:alocacoes, custoEsperado:custoEsperado };
+  return { status:'conciliada', motivo:'', pedidosAfetados:alocacoes, custoEsperado:custoEsperado, detalheCusto:detalheCusto };
 }
 
 function applyAllocationsToPedidos(alocacoes, candidatos, depara, custos, numeroNFNova){
@@ -1211,6 +1216,7 @@ function processNext(files, i){
           cnpjEmit: nf.cnpjEmit, nomeEmit: nf.nomeEmit, natOp: nf.natOp, vNF: nf.vNF, infCpl: nf.infCpl,
           itens: nf.itens, status: result.status, motivo: result.motivo,
           pedidosAfetados: result.pedidosAfetados, custoEsperado: result.custoEsperado,
+          detalheCusto: result.detalheCusto || [],
         });
         var afterMatch = result.status==='conciliada' ? applyAllocationsToPedidos(result.pedidosAfetados, candidates, STATE.depara, STATE.custos, nf.numeroNF) : Promise.resolve();
         return afterMatch.then(function(){ return db.collection('conciliador_nfs').add(record); });
@@ -1241,6 +1247,16 @@ function renderNFs(){
     html += '<button class="btn danger" style="margin-left:auto" onclick="removeNF(\''+n.id+'\')">Remover</button>';
     html += '</div>';
     if (n.motivo) html += '<div class="detail">'+n.motivo+'</div>';
+    if (n.detalheCusto && n.detalheCusto.length>0){
+      var linhasDetalhe = n.detalheCusto.map(function(d){
+        return '<tr><td>'+d.sku+'</td><td>'+d.colecao+'</td><td>'+d.volume+'</td><td>'+d.quantidade+'</td><td>'+fmtMoney(d.preco)+'</td><td>'+fmtMoney(d.subtotal)+'</td></tr>';
+      }).join('');
+      var totalCalculado = n.detalheCusto.reduce(function(acc,d){ return acc+(d.subtotal||0); }, 0);
+      html += '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:var(--text-muted)">Ver detalhamento do custo ('+fmtMoney(totalCalculado)+')</summary>'+
+        '<div style="overflow-x:auto;margin-top:6px"><table><thead><tr><th>SKU</th><th>Coleção</th><th>Volume</th><th>Qtd. alocada</th><th>Preço unit. usado</th><th>Subtotal</th></tr></thead><tbody>'+linhasDetalhe+
+        '<tr><td colspan="5" style="text-align:right;font-weight:600">Total calculado:</td><td style="font-weight:600">'+fmtMoney(totalCalculado)+'</td></tr>'+
+        '</tbody></table></div></details>';
+    }
     if (n.status==='pendente'){
       html += '<div class="row" style="margin-top:8px">'+
         '<div class="field"><label>Escola</label><select id="vinc_escola_'+n.id+'" onchange="carregarPedidosParaVinculo(\''+n.id+'\')"><option value="">Selecionar escola</option>'+opcoesEscola+'</select></div>'+
@@ -1330,7 +1346,8 @@ function vincularManual(nfId, pedidoId){
   afterMatch.then(function(){
     return db.collection('conciliador_nfs').doc(nfId).update({
       status: result.status, motivo: result.motivo, pedidosAfetados: result.pedidosAfetados,
-      custoEsperado: result.custoEsperado, processadoEm: new Date().toISOString(),
+      custoEsperado: result.custoEsperado, detalheCusto: result.detalheCusto || [],
+      processadoEm: new Date().toISOString(),
     });
   }).then(function(){ hideLoading(); renderPedidos(); refreshSummary(); }).catch(onError);
 }
