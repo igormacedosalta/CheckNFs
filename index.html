@@ -485,6 +485,7 @@ var COLUNAS_PEDIDOS = [
   { campo:'projeto', label:'Projeto?' },
   { campo:'tipoFaturamento', label:'Tipo fat.' },
   { campo:'criadoEm', label:'Data de upload' },
+  { campo:'numeroPedidoFornecedor', label:'Nº do pedido' },
   { campo:'numeroNF', label:'NF' },
   { campo:'status', label:'Status' },
 ];
@@ -554,13 +555,16 @@ function renderPedidosFromCache(){
     var statusLabel = p.status==='aberto'?'Aberto':p.status==='parcial'?'Parcial':'Concluído';
     return '<tr><td>'+p.idEscola+'</td><td>'+p.colecao+'</td><td>'+p.volume+'</td><td>'+p.quantidade+'</td>'+
       '<td>'+p.dataPedido+'</td><td>'+p.projeto+'</td><td>'+capitalizarPrimeira(p.tipoFaturamento)+'</td>'+
-      '<td>'+fmtDate(p.criadoEm)+'</td><td>'+(p.numeroNF||'')+'</td>'+
+      '<td>'+fmtDate(p.criadoEm)+'</td>'+
+      '<td><input id="np_'+p.id+'" value="'+(p.numeroPedidoFornecedor||'')+'" style="width:110px"> '+
+      '<button class="btn secondary" onclick="salvarNumeroPedido(\''+p.id+'\')">Salvar</button></td>'+
+      '<td>'+(p.numeroNF||'')+'</td>'+
       '<td><span class="pill '+p.status+'">'+statusLabel+'</span></td>'+
       '<td><button class="btn secondary" onclick="openEditPedido(\''+p.id+'\')">Editar</button> '+
       '<button class="btn danger" onclick="removePedido(\''+p.id+'\')">Remover</button></td></tr>';
   }).join('');
   var totalRow = '<tr><td colspan="3" style="text-align:right;font-weight:600;">Total (filtro atual, '+ordenados.length+' pedido(s)):</td>'+
-    '<td style="font-weight:600;">'+totalQtd+'</td><td colspan="7"></td></tr>';
+    '<td style="font-weight:600;">'+totalQtd+'</td><td colspan="8"></td></tr>';
   var headerCols = COLUNAS_PEDIDOS.map(function(c){
     var seta = sortPedidos.campo===c.campo ? (sortPedidos.direcao==='asc' ? ' \u25B2' : ' \u25BC') : '';
     return '<th style="cursor:pointer;user-select:none" onclick="toggleSortPedidos(\''+c.campo+'\')" title="Clique para ordenar">'+c.label+seta+'</th>';
@@ -673,7 +677,7 @@ function handlePedidosFile(file){
           dataPedido: idx.dataPedido>=0 ? excelValueToDateStr(r[idx.dataPedido]) : '',
           projeto: idx.projeto>=0 ? String(r[idx.projeto]||'').trim() : '',
           tipoFaturamento: idx.tipoFaturamento>=0 ? capitalizarPrimeira(r[idx.tipoFaturamento]) : '',
-          status:'aberto', recebido:{}, criadoEm: new Date().toISOString(), numeroNF:'',
+          status:'aberto', recebido:{}, criadoEm: new Date().toISOString(), numeroNF:'', numeroPedidoFornecedor:'',
         };
         objetos.push(obj);
       }
@@ -693,6 +697,18 @@ function handlePedidosFile(file){
   };
   reader.onerror = function(){ hideLoading(); alert('Não consegui ler o arquivo.'); };
   reader.readAsArrayBuffer(file);
+}
+
+function salvarNumeroPedido(id){
+  var el = document.getElementById('np_'+id);
+  if (!el) return;
+  var valor = el.value.trim();
+  showLoading('Salvando número do pedido...');
+  db.collection('conciliador_pedidos').doc(id).update({ numeroPedidoFornecedor: valor }).then(function(){
+    var p = escolaPedidosCache.filter(function(x){ return String(x.id)===String(id); })[0];
+    if (p) p.numeroPedidoFornecedor = valor;
+    hideLoading();
+  }).catch(onError);
 }
 
 function removePedido(id){
@@ -1034,12 +1050,24 @@ function parseNFeXML(xmlText){
     if (!prod) continue;
     itens.push({ sku:getTag(prod,"cProd"), descricao:getTag(prod,"xProd"), quantidade:parseFloat(getTag(prod,"qCom")||"0"), valor:parseFloat(getTag(prod,"vProd")||"0") });
   }
+  var infCplTexto = getTag(infAdic,"infCpl");
   return {
     chave: chave, numeroNF: getTag(ide,"nNF"), natOp: getTag(ide,"natOp"),
     cnpjEmit: getTag(emit,"CNPJ"), nomeEmit: getTag(emit,"xNome"),
     cnpjDest: getTag(dest,"CNPJ") || getTag(dest,"CPF"), nomeDest: getTag(dest,"xNome"),
-    vNF: parseFloat(getTag(total,"vNF")||"0"), infCpl: getTag(infAdic,"infCpl"), itens: itens,
+    vNF: parseFloat(getTag(total,"vNF")||"0"), infCpl: infCplTexto, itens: itens,
+    numerosPedido: extrairNumerosPedido(infCplTexto),
   };
+}
+
+// Procura por algo como "Pedido(s): 7696188 - ..." no texto de informações complementares da NF
+// e devolve os números encontrados (só sequências com 4+ dígitos, pra não pegar quantidades soltas tipo "60").
+function extrairNumerosPedido(infCpl){
+  if (!infCpl) return [];
+  var match = infCpl.match(/pedido\(?s?\)?\s*:?\s*([\d\s\-\|,]+)/i);
+  if (!match) return [];
+  var numeros = match[1].match(/\d{4,}/g);
+  return numeros || [];
 }
 
 // =====================================================================
@@ -1208,6 +1236,26 @@ function buscarCandidatosPorEscolas(idsEscola){
   });
 }
 
+// Busca pedidos pelo "Nº do pedido" preenchido manualmente — método principal de vínculo agora,
+// já que evita ambiguidade entre vários pedidos parecidos da mesma escola/coleção/volume.
+function buscarCandidatosPorNumeroPedido(numeros){
+  if (!numeros || numeros.length===0) return Promise.resolve([]);
+  var promises = numeros.map(function(n){
+    return db.collection('conciliador_pedidos').where('numeroPedidoFornecedor','==', n).get();
+  });
+  return Promise.all(promises).then(function(snaps){
+    var todos = []; var vistos = {};
+    snaps.forEach(function(snap){
+      snap.docs.forEach(function(d){
+        if (vistos[d.id]) return;
+        vistos[d.id] = true;
+        todos.push(Object.assign({id:d.id}, d.data()));
+      });
+    });
+    return todos.filter(function(p){ return p.status!=='concluido'; });
+  });
+}
+
 function handleNFFiles(fileList){
   var files = Array.prototype.slice.call(fileList);
   var box = document.getElementById('nfFilebox');
@@ -1229,8 +1277,9 @@ function processNext(files, i){
     var record = { arquivo: files[i].name, processadoEm: new Date().toISOString() };
     try{
       var nf = parseNFeXML(e.target.result);
-      var idsEscola = getIdsEscolaPorCNPJ(nf.cnpjDest);
-      buscarCandidatosPorEscolas(idsEscola).then(function(candidates){
+      var numeros = nf.numerosPedido || [];
+
+      function finalizarComCandidatos(candidates){
         var result = matchNF(nf, candidates, STATE.depara, STATE.custos, STATE.faturamento);
         Object.assign(record, {
           chave: nf.chave, numeroNF: nf.numeroNF, cnpjDest: nf.cnpjDest, nomeDest: nf.nomeDest,
@@ -1241,7 +1290,26 @@ function processNext(files, i){
         });
         var afterMatch = result.status==='conciliada' ? applyAllocationsToPedidos(result.pedidosAfetados, candidates, STATE.depara, STATE.custos, nf.numeroNF) : Promise.resolve();
         return afterMatch.then(function(){ return db.collection('conciliador_nfs').add(record); });
-      }).then(function(){ processNext(files, i+1); }).catch(onError);
+      }
+
+      if (numeros.length>0){
+        buscarCandidatosPorNumeroPedido(numeros).then(function(candidatosPorNumero){
+          if (candidatosPorNumero.length>0) return finalizarComCandidatos(candidatosPorNumero);
+          Object.assign(record, {
+            chave: nf.chave, numeroNF: nf.numeroNF, cnpjDest: nf.cnpjDest, nomeDest: nf.nomeDest,
+            cnpjEmit: nf.cnpjEmit, nomeEmit: nf.nomeEmit, natOp: nf.natOp, vNF: nf.vNF, infCpl: nf.infCpl,
+            itens: nf.itens, status: 'pendente',
+            motivo: 'A NF traz o(s) número(s) de pedido '+numeros.join(', ')+', mas nenhum pedido cadastrado tem esse "Nº do pedido" preenchido ainda. Preencha esse campo na aba Pedidos e reprocesse esta NF.',
+            pedidosAfetados: {}, custoEsperado: 0, detalheCusto: [],
+          });
+          return db.collection('conciliador_nfs').add(record);
+        }).then(function(){ processNext(files, i+1); }).catch(onError);
+      } else {
+        var idsEscola = getIdsEscolaPorCNPJ(nf.cnpjDest);
+        buscarCandidatosPorEscolas(idsEscola).then(function(candidates){
+          return finalizarComCandidatos(candidates);
+        }).then(function(){ processNext(files, i+1); }).catch(onError);
+      }
     } catch(err){
       record.status = 'erro'; record.motivo = 'Falha ao ler o XML: ' + err.message;
       record.itens = []; record.pedidosAfetados = {}; record.vNF = 0; record.custoEsperado = 0;
