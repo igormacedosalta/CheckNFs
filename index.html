@@ -256,6 +256,12 @@ function fmtMoney(v){ return "R$ " + (Number(v)||0).toLocaleString('pt-BR',{mini
 function fmtDate(iso){ if(!iso) return ''; var d=new Date(iso); return isNaN(d.getTime())?'':d.toLocaleDateString('pt-BR'); }
 function normText(s){ return (s||"").toString().normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9 ]/g,"").replace(/\s+/g,' ').trim(); }
 function onlyDigits(s){ return (s||"").toString().replace(/\D/g,""); }
+// Padroniza texto como "Venda", "Bonificação" etc: 1ª letra maiúscula, resto minúsculo
+function capitalizarPrimeira(s){
+  s = (s||'').toString().trim();
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
 
 var cancelRequested = false;
 function showLoading(msg, cancelable){
@@ -445,6 +451,49 @@ function popularSubFiltros(){
   document.getElementById('colecao_datalist').innerHTML = colecoes.map(function(c){ return '<option value="'+c+'">'; }).join('');
 }
 
+var COLUNAS_PEDIDOS = [
+  { campo:'idEscola', label:'Escola' },
+  { campo:'colecao', label:'Coleção' },
+  { campo:'volume', label:'Vol.' },
+  { campo:'quantidade', label:'Qtd.' },
+  { campo:'dataPedido', label:'Data do pedido' },
+  { campo:'projeto', label:'Projeto?' },
+  { campo:'tipoFaturamento', label:'Tipo fat.' },
+  { campo:'criadoEm', label:'Data de upload' },
+  { campo:'numeroNF', label:'NF' },
+  { campo:'status', label:'Status' },
+];
+var sortPedidos = { campo:'criadoEm', direcao:'desc' };
+
+function toggleSortPedidos(campo){
+  if (sortPedidos.campo===campo) sortPedidos.direcao = sortPedidos.direcao==='asc' ? 'desc' : 'asc';
+  else { sortPedidos.campo = campo; sortPedidos.direcao = 'asc'; }
+  renderPedidosFromCache();
+}
+
+function parseBRDate(str){
+  if (!str) return null;
+  var m = String(str).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  return new Date(Number(m[3]), Number(m[2])-1, Number(m[1]));
+}
+
+function compararPedidos(a, b, campo){
+  if (campo==='quantidade') return (Number(a.quantidade)||0) - (Number(b.quantidade)||0);
+  if (campo==='criadoEm') return new Date(a.criadoEm||0) - new Date(b.criadoEm||0);
+  if (campo==='dataPedido'){
+    var da = parseBRDate(a.dataPedido), db = parseBRDate(b.dataPedido);
+    if (da && db) return da-db;
+    return normText(a.dataPedido).localeCompare(normText(b.dataPedido));
+  }
+  if (campo==='volume'){
+    var na = parseFloat(a.volume), nb = parseFloat(b.volume);
+    if (!isNaN(na) && !isNaN(nb) && na!==nb) return na-nb;
+    return normText(String(a.volume||'')).localeCompare(normText(String(b.volume||'')));
+  }
+  return normText(String(a[campo]||'')).localeCompare(normText(String(b[campo]||'')));
+}
+
 function renderPedidosFromCache(){
   var el = document.getElementById('pedidosTable');
   if (!document.getElementById('filtro_escola').value){
@@ -466,17 +515,20 @@ function renderPedidosFromCache(){
   if (filtrados.length===0){ el.innerHTML = '<div class="empty">Nenhum pedido encontrado para esse filtro.</div>'; return; }
 
   var totalQtd = filtrados.reduce(function(acc,p){ return acc + (Number(p.quantidade)||0); }, 0);
-  var ordenados = filtrados.slice().sort(function(a,b){ return new Date(b.criadoEm||0) - new Date(a.criadoEm||0); });
+  var ordenados = filtrados.slice().sort(function(a,b){
+    var r = compararPedidos(a, b, sortPedidos.campo);
+    return sortPedidos.direcao==='asc' ? r : -r;
+  });
   var visiveis = ordenados.slice(0, LIMITE_LINHAS_PEDIDOS);
 
   var aviso = ordenados.length > LIMITE_LINHAS_PEDIDOS
-    ? '<div class="warn">Mostrando '+LIMITE_LINHAS_PEDIDOS+' de '+ordenados.length+' pedidos (mais recentes primeiro), mas o total abaixo já soma todos os '+ordenados.length+'.</div>'
+    ? '<div class="warn">Mostrando '+LIMITE_LINHAS_PEDIDOS+' de '+ordenados.length+' pedidos, mas o total abaixo já soma todos os '+ordenados.length+'.</div>'
     : '';
 
   var rows = visiveis.map(function(p){
     var statusLabel = p.status==='aberto'?'Aberto':p.status==='parcial'?'Parcial':'Concluído';
     return '<tr><td>'+p.idEscola+'</td><td>'+p.colecao+'</td><td>'+p.volume+'</td><td>'+p.quantidade+'</td>'+
-      '<td>'+p.dataPedido+'</td><td>'+p.projeto+'</td><td>'+p.tipoFaturamento+'</td>'+
+      '<td>'+p.dataPedido+'</td><td>'+p.projeto+'</td><td>'+capitalizarPrimeira(p.tipoFaturamento)+'</td>'+
       '<td>'+fmtDate(p.criadoEm)+'</td><td>'+(p.numeroNF||'')+'</td>'+
       '<td><span class="pill '+p.status+'">'+statusLabel+'</span></td>'+
       '<td><button class="btn secondary" onclick="openEditPedido(\''+p.id+'\')">Editar</button> '+
@@ -484,7 +536,11 @@ function renderPedidosFromCache(){
   }).join('');
   var totalRow = '<tr><td colspan="3" style="text-align:right;font-weight:600;">Total (filtro atual, '+ordenados.length+' pedido(s)):</td>'+
     '<td style="font-weight:600;">'+totalQtd+'</td><td colspan="7"></td></tr>';
-  el.innerHTML = aviso + '<table><thead><tr><th>Escola</th><th>Coleção</th><th>Vol.</th><th>Qtd.</th><th>Data do pedido</th><th>Projeto?</th><th>Tipo fat.</th><th>Data de upload</th><th>NF</th><th>Status</th><th></th></tr></thead><tbody>'+rows+totalRow+'</tbody></table>';
+  var headerCols = COLUNAS_PEDIDOS.map(function(c){
+    var seta = sortPedidos.campo===c.campo ? (sortPedidos.direcao==='asc' ? ' \u25B2' : ' \u25BC') : '';
+    return '<th style="cursor:pointer;user-select:none" onclick="toggleSortPedidos(\''+c.campo+'\')" title="Clique para ordenar">'+c.label+seta+'</th>';
+  }).join('') + '<th></th>';
+  el.innerHTML = aviso + '<table><thead><tr>'+headerCols+'</tr></thead><tbody>'+rows+totalRow+'</tbody></table>';
 }
 
 // Chamada após uploads/edições/remoções: repopula o seletor de escolas e, se uma já estiver escolhida, busca de novo
@@ -502,7 +558,9 @@ function openEditPedido(id){
   document.getElementById('editPedidoModal').dataset.editingId = id;
   EDIT_FIELDS.forEach(function(f){
     var el = document.getElementById('edit_'+f);
-    if (el) el.value = p[f] !== undefined && p[f] !== null ? p[f] : '';
+    if (!el) return;
+    var v = p[f] !== undefined && p[f] !== null ? p[f] : '';
+    el.value = f==='tipoFaturamento' ? capitalizarPrimeira(v) : v;
   });
   document.getElementById('editPedidoModal').style.display = 'flex';
 }
@@ -518,7 +576,9 @@ function saveEditPedido(){
   EDIT_FIELDS.forEach(function(f){
     var el = document.getElementById('edit_'+f);
     if (!el) return;
-    updates[f] = f==='quantidade' ? (Number(el.value)||0) : el.value;
+    if (f==='quantidade') updates[f] = Number(el.value)||0;
+    else if (f==='tipoFaturamento') updates[f] = capitalizarPrimeira(el.value);
+    else updates[f] = el.value;
   });
   showLoading('Salvando...');
   db.collection('conciliador_pedidos').doc(id).update(updates).then(function(){
@@ -587,7 +647,7 @@ function handlePedidosFile(file){
           quantidade: idx.quantidade>=0 ? (Number(r[idx.quantidade])||0) : 0,
           dataPedido: idx.dataPedido>=0 ? excelValueToDateStr(r[idx.dataPedido]) : '',
           projeto: idx.projeto>=0 ? String(r[idx.projeto]||'').trim() : '',
-          tipoFaturamento: idx.tipoFaturamento>=0 ? String(r[idx.tipoFaturamento]||'').trim() : '',
+          tipoFaturamento: idx.tipoFaturamento>=0 ? capitalizarPrimeira(r[idx.tipoFaturamento]) : '',
           status:'aberto', recebido:{}, criadoEm: new Date().toISOString(), numeroNF:'',
         };
         objetos.push(obj);
