@@ -175,6 +175,9 @@
         <button class="btn" onclick="addEscolaManual()">Adicionar / atualizar</button>
       </div>
     </div>
+    <div class="card">
+      <div class="row" style="margin-bottom:0"><div class="field" style="min-width:280px"><label>Buscar</label><input id="busca_escolas" placeholder="Buscar por escola ou CNPJ..." oninput="renderEscolas()"></div></div>
+    </div>
     <div class="card"><div id="escolasTable"></div></div>
   </div>
 
@@ -190,6 +193,9 @@
         <div class="field"><label>SKU</label><input id="d_sku"></div>
         <button class="btn" onclick="addDeparaManual()">Adicionar</button>
       </div>
+    </div>
+    <div class="card">
+      <div class="row" style="margin-bottom:0"><div class="field" style="min-width:280px"><label>Buscar</label><input id="busca_depara" placeholder="Buscar por selo, coleção, volume ou SKU..." oninput="renderDepara()"></div></div>
     </div>
     <div class="card"><div id="deparaTable"></div></div>
   </div>
@@ -207,6 +213,9 @@
         <div class="field"><label>Custo unitário (R$)</label><input id="c_preco" type="number"></div>
         <button class="btn" onclick="addCustoManual()">Adicionar / atualizar</button>
       </div>
+    </div>
+    <div class="card">
+      <div class="row" style="margin-bottom:0"><div class="field" style="min-width:280px"><label>Buscar</label><input id="busca_custos" placeholder="Buscar por escola, coleção, volume ou SKU..." oninput="renderCustos()"></div></div>
     </div>
     <div class="card"><div id="custosTable"></div></div>
   </div>
@@ -637,8 +646,12 @@ function clearPedidos(){
 // =====================================================================
 function renderEscolas(){
   var el = document.getElementById('escolasTable');
-  if (STATE.escolas.length===0){ el.innerHTML = '<div class="empty">Nenhuma escola cadastrada ainda.</div>'; return; }
-  var ordenadas = STATE.escolas.slice().sort(function(a,b){ return normText(a.idEscola).localeCompare(normText(b.idEscola)); });
+  var busca = normText(document.getElementById('busca_escolas') ? document.getElementById('busca_escolas').value : '');
+  var filtradas = STATE.escolas.filter(function(e){
+    return !busca || normText(e.idEscola).indexOf(busca)>=0 || normText(e.cnpj).indexOf(busca)>=0;
+  });
+  if (filtradas.length===0){ el.innerHTML = '<div class="empty">'+(STATE.escolas.length===0?'Nenhuma escola cadastrada ainda.':'Nenhuma escola encontrada para essa busca.')+'</div>'; return; }
+  var ordenadas = filtradas.slice().sort(function(a,b){ return normText(a.idEscola).localeCompare(normText(b.idEscola)); });
   var rows = ordenadas.map(function(e){ return '<tr><td>'+e.idEscola+'</td><td>'+e.cnpj+'</td></tr>'; }).join('');
   el.innerHTML = '<table><thead><tr><th>ID Escola</th><th>CNPJ de faturamento</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
@@ -692,8 +705,13 @@ function handleEscolasFile(file){
 // =====================================================================
 function renderDepara(){
   var el = document.getElementById('deparaTable');
-  if (STATE.depara.length===0){ el.innerHTML = '<div class="empty">Nenhuma relação SKU cadastrada ainda.</div>'; return; }
-  var rows = STATE.depara.map(function(d){
+  var busca = normText(document.getElementById('busca_depara') ? document.getElementById('busca_depara').value : '');
+  var filtrados = STATE.depara.filter(function(d){
+    return !busca || normText(d.selo).indexOf(busca)>=0 || normText(d.colecao).indexOf(busca)>=0
+      || normText(String(d.volume)).indexOf(busca)>=0 || normText(d.sku).indexOf(busca)>=0;
+  });
+  if (filtrados.length===0){ el.innerHTML = '<div class="empty">'+(STATE.depara.length===0?'Nenhuma relação SKU cadastrada ainda.':'Nenhum resultado encontrado para essa busca.')+'</div>'; return; }
+  var rows = filtrados.map(function(d){
     return '<tr><td>'+d.selo+'</td><td>'+d.colecao+'</td><td>'+d.volume+'</td><td>'+d.sku+'</td></tr>';
   }).join('');
   el.innerHTML = '<table><thead><tr><th>Selo</th><th>Coleção</th><th>Volume</th><th>SKU</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -715,7 +733,7 @@ function addDeparaManual(){
   }).catch(onError);
 }
 
-var DEPARA_COLUMN_MAP = { 'selo':'selo', 'colecao':'colecao', 'volume':'volume', 'sku':'sku' };
+var DEPARA_COLUMN_MAP = { 'selo':'selo', 'colecao':'colecao', 'volume':'volume' };
 
 function handleDeparaFile(file){
   if (!file) return;
@@ -729,6 +747,8 @@ function handleDeparaFile(file){
       var rawHeaders = rows[0].map(function(h){ return normText(h); });
       var fieldIdx = {};
       rawHeaders.forEach(function(h,i){ if (DEPARA_COLUMN_MAP[h]) fieldIdx[DEPARA_COLUMN_MAP[h]] = i; });
+      var idxSku = rawHeaders.findIndex(function(h){ return h.indexOf('sku')>=0 || h.indexOf('codigo')>=0 || h.indexOf('material')>=0; });
+      if (idxSku>=0) fieldIdx.sku = idxSku;
       var payload = [];
       for (var i=1;i<rows.length;i++){
         var r = rows[i];
@@ -754,8 +774,13 @@ function handleDeparaFile(file){
 // =====================================================================
 function renderCustos(){
   var el = document.getElementById('custosTable');
-  if (STATE.custos.length===0){ el.innerHTML = '<div class="empty">Nenhum custo cadastrado ainda.</div>'; return; }
-  var rows = STATE.custos.map(function(c){
+  var busca = normText(document.getElementById('busca_custos') ? document.getElementById('busca_custos').value : '');
+  var filtrados = STATE.custos.filter(function(c){
+    return !busca || normText(c.idEscola).indexOf(busca)>=0 || normText(c.colecao).indexOf(busca)>=0
+      || normText(String(c.volume)).indexOf(busca)>=0 || normText(c.sku).indexOf(busca)>=0;
+  });
+  if (filtrados.length===0){ el.innerHTML = '<div class="empty">'+(STATE.custos.length===0?'Nenhum custo cadastrado ainda.':'Nenhum resultado encontrado para essa busca.')+'</div>'; return; }
+  var rows = filtrados.map(function(c){
     return '<tr><td>'+c.idEscola+'</td><td>'+c.colecao+'</td><td>'+c.volume+'</td><td>'+c.sku+'</td><td>'+fmtMoney(c.preco)+'</td></tr>';
   }).join('');
   el.innerHTML = '<table><thead><tr><th>ID Escola</th><th>Coleção</th><th>Volume</th><th>SKU</th><th>Custo unitário</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -1043,6 +1068,7 @@ function renderNFs(){
     if (n.vNF) html += '<span class="hint">'+fmtMoney(n.vNF)+'</span>';
     if (n.nomeDest) html += '<span class="hint">Escola: '+n.nomeDest+'</span>';
     if (n.cnpjDest) html += '<span class="hint">CNPJ '+n.cnpjDest+'</span>';
+    html += '<button class="btn danger" style="margin-left:auto" onclick="removeNF(\''+n.id+'\')">Remover</button>';
     html += '</div>';
     if (n.motivo) html += '<div class="detail">'+n.motivo+'</div>';
     if (n.status==='pendente'){
@@ -1054,6 +1080,57 @@ function renderNFs(){
     html += '</div>';
     return html;
   }).join('');
+}
+
+// Desfaz o efeito de uma NF já conciliada nos pedidos afetados (usado antes de excluir a NF)
+function revertAllocations(pedidosAfetados, depara, numeroNF){
+  var pedidoIds = Object.keys(pedidosAfetados || {});
+  if (pedidoIds.length===0) return Promise.resolve();
+  var refs = pedidoIds.map(function(id){ return db.collection('conciliador_pedidos').doc(id); });
+  return Promise.all(refs.map(function(ref){ return ref.get(); })).then(function(docs){
+    var batch = db.batch();
+    var diff = { abertos:0, parciais:0, concluidos:0 };
+    var campoPorStatus = { aberto:'abertos', parcial:'parciais', concluido:'concluidos' };
+    docs.forEach(function(doc){
+      if (!doc.exists) return;
+      var pedido = Object.assign({id:doc.id}, doc.data());
+      var recebido = Object.assign({}, pedido.recebido||{});
+      Object.keys(pedidosAfetados[doc.id]).forEach(function(sku){
+        recebido[sku] = Math.max(0, (recebido[sku]||0) - pedidosAfetados[doc.id][sku]);
+        if (recebido[sku]===0) delete recebido[sku];
+      });
+      var expected = buildExpectedForPedido(pedido, depara, []);
+      var totalRestante = Object.keys(expected).reduce(function(acc, sku){ return acc + Math.max(0, expected[sku].qtyTotal - (recebido[sku]||0)); }, 0);
+      var totalRecebidoAgora = Object.keys(recebido).reduce(function(acc, sku){ return acc + recebido[sku]; }, 0);
+      var novoStatus = totalRecebidoAgora<=0 ? 'aberto' : (totalRestante<=0.0001 ? 'concluido' : 'parcial');
+      var nfsExistentes = (pedido.numeroNF||'').split(',').map(function(s){return s.trim();}).filter(Boolean).filter(function(n){ return n!==numeroNF; });
+      if (novoStatus !== pedido.status){
+        diff[campoPorStatus[pedido.status] || 'abertos'] -= 1;
+        diff[campoPorStatus[novoStatus]] += 1;
+      }
+      batch.update(db.collection('conciliador_pedidos').doc(doc.id), { recebido: recebido, status: novoStatus, numeroNF: nfsExistentes.join(', ') });
+    });
+    var incremento = {};
+    Object.keys(diff).forEach(function(k){ if (diff[k]!==0) incremento[k] = firebase.firestore.FieldValue.increment(diff[k]); });
+    if (Object.keys(incremento).length>0) batch.set(db.doc('conciliador_reference/stats'), incremento, {merge:true});
+    return batch.commit();
+  });
+}
+
+function removeNF(nfId){
+  var nf = STATE.nfs.filter(function(n){ return String(n.id)===String(nfId); })[0];
+  if (!nf) return;
+  var msg = nf.status==='conciliada'
+    ? 'Essa NF já foi conciliada e afetou pedidos. Remover vai DESFAZER esse vínculo (os pedidos envolvidos voltam ao status anterior). Confirma?'
+    : 'Remover essa NF do histórico? Essa ação não pode ser desfeita.';
+  if (!confirm(msg)) return;
+  showLoading('Removendo NF...');
+  var revert = nf.status==='conciliada' ? revertAllocations(nf.pedidosAfetados, STATE.depara, nf.numeroNF) : Promise.resolve();
+  revert.then(function(){
+    return db.collection('conciliador_nfs').doc(nfId).delete();
+  }).then(function(){
+    hideLoading(); renderPedidos(); refreshSummary();
+  }).catch(onError);
 }
 
 function carregarPedidosParaVinculo(nfId){
