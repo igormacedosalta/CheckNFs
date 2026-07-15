@@ -205,6 +205,7 @@
       <div class="filebox" onclick="document.getElementById('custosFile').click()">Clique para subir a base de custos por SKU (.xlsx, .xls ou .csv)</div>
       <input type="file" id="custosFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleCustosFile(this.files[0])">
       <div class="hint">Colunas esperadas: ID Escola, Coleção, Volume, SKU, Custo unitário. O custo pode variar por escola — cada upload <strong>substitui</strong> a base inteira.</div>
+      <div id="custosImportWarn"></div>
       <div class="row" style="margin-top:12px">
         <div class="field"><label>ID Escola</label><input id="c_idEscola"></div>
         <div class="field"><label>Coleção</label><input id="c_colecao"></div>
@@ -865,11 +866,6 @@ function addCustoManual(){
   }).catch(onError);
 }
 
-var CUSTOS_COLUMN_MAP = {
-  'id escola':'idEscola','idescola':'idEscola','colecao':'colecao','volume':'volume','sku':'sku',
-  'custo unitario':'preco','custo':'preco','preco':'preco',
-};
-
 function handleCustosFile(file){
   if (!file) return;
   showLoading('Lendo base de custos...');
@@ -880,24 +876,34 @@ function handleCustosFile(file){
       var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
       if (rows.length<2){ hideLoading(); return; }
       var rawHeaders = rows[0].map(function(h){ return normText(h); });
-      var fieldIdx = {};
-      rawHeaders.forEach(function(h,i){ if (CUSTOS_COLUMN_MAP[h]) fieldIdx[CUSTOS_COLUMN_MAP[h]] = i; });
+      var idx = {
+        idEscola: rawHeaders.findIndex(function(h){ return h.indexOf('escola')>=0; }),
+        colecao: rawHeaders.findIndex(function(h){ return h.indexOf('colecao')>=0; }),
+        volume: rawHeaders.findIndex(function(h){ return h.indexOf('volume')>=0; }),
+        sku: rawHeaders.findIndex(function(h){ return h.indexOf('sku')>=0 || h.indexOf('codigo')>=0 || h.indexOf('material')>=0; }),
+        preco: rawHeaders.findIndex(function(h){ return h.indexOf('custo')>=0 || h.indexOf('preco')>=0 || h.indexOf('valor')>=0; }),
+      };
+      var naoReconhecidas = rows[0].filter(function(h,i){ return h && Object.keys(idx).every(function(k){ return idx[k]!==i; }); });
+      var avisoEl = document.getElementById('custosImportWarn');
+      if (avisoEl) avisoEl.innerHTML = naoReconhecidas.length ? '<div class="warn">Colunas não reconhecidas (ignoradas): '+naoReconhecidas.join(', ')+'</div>' : '';
+
       var payload = [];
       for (var i=1;i<rows.length;i++){
         var r = rows[i];
         if (!r || r.every(function(c){return c==='' || c==null;})) continue;
-        var idEscola = fieldIdx.idEscola!==undefined ? String(r[fieldIdx.idEscola]||'').trim() : '';
-        var colecao = fieldIdx.colecao!==undefined ? String(r[fieldIdx.colecao]||'').trim() : '';
-        var sku = fieldIdx.sku!==undefined ? String(r[fieldIdx.sku]||'').trim() : '';
+        var idEscola = idx.idEscola>=0 ? String(r[idx.idEscola]||'').trim() : '';
+        var colecao = idx.colecao>=0 ? String(r[idx.colecao]||'').trim() : '';
+        var sku = idx.sku>=0 ? String(r[idx.sku]||'').trim() : '';
         if (!idEscola || !colecao || !sku) continue;
         payload.push({
           idEscola: idEscola, colecao: colecao,
-          volume: fieldIdx.volume!==undefined ? String(r[fieldIdx.volume]||'').trim() : '',
-          sku: sku, preco: fieldIdx.preco!==undefined ? Number(r[fieldIdx.preco])||0 : 0,
+          volume: idx.volume>=0 ? String(r[idx.volume]||'').trim() : '',
+          sku: sku, preco: idx.preco>=0 ? (Number(r[idx.preco])||0) : 0,
         });
       }
       db.doc('conciliador_reference/custos').set({lista: payload}).then(function(){
         document.getElementById('custosFile').value=''; hideLoading();
+        if (payload.length===0) alert('Nenhuma linha válida encontrada. Confira se as colunas ID Escola, Coleção e SKU estão preenchidas.');
       }).catch(onError);
     } catch(err){ onError(err); }
   };
