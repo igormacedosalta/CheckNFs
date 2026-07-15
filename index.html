@@ -97,7 +97,7 @@
 </head>
 <body>
 
-<div id="loadingOverlay"><div class="box"><div class="spinner"></div><span id="loadingText">Carregando...</span></div></div>
+<div id="loadingOverlay"><div class="box"><div class="spinner"></div><span id="loadingText">Carregando...</span><button class="btn secondary" id="cancelUploadBtn" style="display:none" onclick="requestCancelUpload()">Cancelar</button></div></div>
 
 <div id="loginScreen">
   <h2>Conciliador de pedidos x NF</h2>
@@ -157,7 +157,9 @@
         <div class="field"><label>Coleção</label><select id="filtro_colecao" onchange="renderPedidos()"><option value="">Todas</option></select></div>
         <div class="field"><label>Volume</label><select id="filtro_volume" onchange="renderPedidos()"><option value="">Todos</option></select></div>
         <button class="btn secondary" onclick="limparFiltrosPedidos()">Limpar filtros</button>
+        <button class="btn secondary" onclick="renderPedidos()" title="Os pedidos não atualizam sozinhos em tempo real (para economizar leituras) — clique para buscar de novo">Atualizar</button>
       </div>
+      <div class="hint">Por economia de leituras, essa lista não fica ao vivo — clique em "Atualizar" para buscar as mudanças mais recentes.</div>
     </div>
     <div class="card"><div id="pedidosTable"></div></div>
   </div>
@@ -246,8 +248,14 @@ function fmtDate(iso){ if(!iso) return ''; var d=new Date(iso); return isNaN(d.g
 function normText(s){ return (s||"").toString().normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9 ]/g,"").replace(/\s+/g,' ').trim(); }
 function onlyDigits(s){ return (s||"").toString().replace(/\D/g,""); }
 
-function showLoading(msg){ document.getElementById('loadingText').textContent = msg||'Carregando...'; document.getElementById('loadingOverlay').style.display='flex'; }
+var cancelRequested = false;
+function showLoading(msg, cancelable){
+  document.getElementById('loadingText').textContent = msg||'Carregando...';
+  document.getElementById('loadingOverlay').style.display='flex';
+  document.getElementById('cancelUploadBtn').style.display = cancelable ? 'inline-block' : 'none';
+}
 function hideLoading(){ document.getElementById('loadingOverlay').style.display='none'; }
+function requestCancelUpload(){ cancelRequested = true; }
 function onError(err){ hideLoading(); alert('Ocorreu um erro: ' + (err && err.message ? err.message : err)); console.error(err); }
 
 // =====================================================================
@@ -308,17 +316,13 @@ auth.onAuthStateChanged(function(user){
 // =====================================================================
 function startListeners(){
   showLoading('Carregando base...');
-  var loadedOnce = { p:false, e:false, d:false, c:false, n:false };
-  function maybeHide(){ if (loadedOnce.p && loadedOnce.e && loadedOnce.d && loadedOnce.c && loadedOnce.n) hideLoading(); }
+  var loadedOnce = { e:false, d:false, c:false, n:false };
+  function maybeHide(){ if (loadedOnce.e && loadedOnce.d && loadedOnce.c && loadedOnce.n) { hideLoading(); renderPedidos(); refreshSummary(); } }
 
-  unsubscribers.push(db.collection('conciliador_pedidos').onSnapshot(function(snap){
-    STATE.pedidos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
-    loadedOnce.p = true; renderSummary(); renderPedidos(); maybeHide();
-  }, onError));
-
-  unsubscribers.push(db.collection('conciliador_nfs').orderBy('processadoEm','desc').onSnapshot(function(snap){
+  // NFs: limitado às mais recentes para não crescer sem controle com o tempo
+  unsubscribers.push(db.collection('conciliador_nfs').orderBy('processadoEm','desc').limit(1000).onSnapshot(function(snap){
     STATE.nfs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
-    loadedOnce.n = true; renderSummary(); renderNFs(); maybeHide();
+    loadedOnce.n = true; renderNFs(); refreshSummary(); maybeHide();
   }, onError));
 
   unsubscribers.push(db.doc('conciliador_reference/escolas').onSnapshot(function(doc){
@@ -344,14 +348,22 @@ function showTab(name){
   });
 }
 
-function renderSummary(){
-  var abertos = STATE.pedidos.filter(function(p){return p.status==='aberto';}).length;
-  var parciais = STATE.pedidos.filter(function(p){return p.status==='parcial';}).length;
-  var concluidos = STATE.pedidos.filter(function(p){return p.status==='concluido';}).length;
-  var conciliadas = STATE.nfs.filter(function(n){return n.status==='conciliada';}).length;
-  var revisao = STATE.nfs.filter(function(n){return n.status!=='conciliada';}).length;
-  var stats = [[abertos,'Pedidos abertos'],[parciais,'Parcialmente atendidos'],[concluidos,'Concluídos'],[conciliadas,'NFs conciliadas'],[revisao,'NFs pendentes de revisão']];
-  document.getElementById('summary').innerHTML = stats.map(function(s){ return '<div class="stat"><div class="n">'+s[0]+'</div><div class="l">'+s[1]+'</div></div>'; }).join('');
+// Contadores via consultas de contagem (count()) — custam 1 leitura cada, não importa o tamanho da base
+function refreshSummary(){
+  var pedidosCol = db.collection('conciliador_pedidos');
+  Promise.all([
+    pedidosCol.where('status','==','aberto').count().get(),
+    pedidosCol.where('status','==','parcial').count().get(),
+    pedidosCol.where('status','==','concluido').count().get(),
+  ]).then(function(results){
+    var abertos = results[0].data().count;
+    var parciais = results[1].data().count;
+    var concluidos = results[2].data().count;
+    var conciliadas = STATE.nfs.filter(function(n){return n.status==='conciliada';}).length;
+    var revisao = STATE.nfs.filter(function(n){return n.status!=='conciliada';}).length;
+    var stats = [[abertos,'Pedidos abertos'],[parciais,'Parcialmente atendidos'],[concluidos,'Concluídos'],[conciliadas,'NFs conciliadas'],[revisao,'NFs pendentes de revisão']];
+    document.getElementById('summary').innerHTML = stats.map(function(s){ return '<div class="stat"><div class="n">'+s[0]+'</div><div class="l">'+s[1]+'</div></div>'; }).join('');
+  }).catch(function(err){ console.error('Falha ao contar pedidos', err); });
 }
 
 // =====================================================================
@@ -375,45 +387,75 @@ function limparFiltrosPedidos(){
   renderPedidos();
 }
 
+function populateFiltrosDeReferencia(){
+  populateFiltroSelect('filtro_escola', STATE.escolas.map(function(e){return e.idEscola;}), 'Todas');
+  populateFiltroSelect('filtro_selo', STATE.depara.map(function(d){return d.selo;}), 'Todos');
+  populateFiltroSelect('filtro_colecao', STATE.depara.map(function(d){return d.colecao;}), 'Todas');
+  populateFiltroSelect('filtro_volume', STATE.depara.map(function(d){return d.volume;}), 'Todos');
+}
+
+var LIMITE_LINHAS_PEDIDOS = 300;
+
 function renderPedidos(){
+  populateFiltrosDeReferencia();
   var el = document.getElementById('pedidosTable');
-  if (STATE.pedidos.length===0){ el.innerHTML = '<div class="empty">Nenhum pedido cadastrado ainda.</div>'; return; }
-
-  var comSelo = STATE.pedidos.map(function(p){ return Object.assign({}, p, { selo: getSeloForColecao(p.colecao) }); });
-
-  populateFiltroSelect('filtro_escola', comSelo.map(function(p){return p.idEscola;}), 'Todas');
-  populateFiltroSelect('filtro_selo', comSelo.map(function(p){return p.selo;}), 'Todos');
-  populateFiltroSelect('filtro_colecao', comSelo.map(function(p){return p.colecao;}), 'Todas');
-  populateFiltroSelect('filtro_volume', comSelo.map(function(p){return p.volume;}), 'Todos');
+  el.innerHTML = '<div class="empty">Buscando pedidos...</div>';
 
   var fEscola = document.getElementById('filtro_escola').value;
   var fSelo = document.getElementById('filtro_selo').value;
   var fColecao = document.getElementById('filtro_colecao').value;
   var fVolume = document.getElementById('filtro_volume').value;
+  var semFiltro = !fEscola && !fSelo && !fColecao && !fVolume;
 
-  var filtrados = comSelo.filter(function(p){
-    return (!fEscola || p.idEscola===fEscola)
-      && (!fSelo || p.selo===fSelo)
-      && (!fColecao || p.colecao===fColecao)
-      && (!fVolume || String(p.volume)===String(fVolume));
+  var query = db.collection('conciliador_pedidos');
+  if (fEscola) query = query.where('idEscola','==',fEscola);
+  if (fColecao) query = query.where('colecao','==',fColecao);
+  if (fVolume) query = query.where('volume','==',fVolume);
+  if (fSelo && !fColecao){
+    var colecoesDoSelo = Array.from(new Set(STATE.depara.filter(function(d){return d.selo===fSelo;}).map(function(d){return d.colecao;})));
+    if (colecoesDoSelo.length===0){ el.innerHTML = '<div class="empty">Nenhuma coleção encontrada para esse selo no De-para.</div>'; return; }
+    if (colecoesDoSelo.length>30){
+      el.innerHTML = '<div class="empty">Esse selo tem coleções demais para filtrar de uma vez (limite técnico de 30). Filtre também por Coleção.</div>'; return;
+    }
+    query = query.where('colecao','in',colecoesDoSelo);
+  }
+  if (semFiltro) query = query.orderBy('criadoEm','desc').limit(LIMITE_LINHAS_PEDIDOS);
+  else query = query.limit(2000);
+
+  query.get().then(function(snap){
+    var pedidos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+    STATE.pedidos = pedidos;
+
+    if (pedidos.length===0){ el.innerHTML = '<div class="empty">Nenhum pedido encontrado para esse filtro.</div>'; return; }
+
+    var totalQtd = pedidos.reduce(function(acc,p){ return acc + (Number(p.quantidade)||0); }, 0);
+    var ordenados = pedidos.slice().sort(function(a,b){ return new Date(b.criadoEm||0) - new Date(a.criadoEm||0); });
+    var visiveis = ordenados.slice(0, LIMITE_LINHAS_PEDIDOS);
+
+    var aviso = '';
+    if (semFiltro){
+      aviso = '<div class="warn">Sem filtro selecionado: mostrando só os '+LIMITE_LINHAS_PEDIDOS+' pedidos mais recentes (o total abaixo reflete só esses, não a base inteira). Use um filtro para ver o total exato de um recorte.</div>';
+    } else if (ordenados.length > LIMITE_LINHAS_PEDIDOS){
+      aviso = '<div class="warn">Mostrando '+LIMITE_LINHAS_PEDIDOS+' de '+ordenados.length+' pedidos encontrados (mais recentes primeiro), mas o total abaixo já soma todos os '+ordenados.length+'.</div>';
+    }
+
+    var rows = visiveis.map(function(p){
+      var statusLabel = p.status==='aberto'?'Aberto':p.status==='parcial'?'Parcial':'Concluído';
+      return '<tr><td>'+p.idEscola+'</td><td>'+p.colecao+'</td><td>'+p.volume+'</td><td>'+p.quantidade+'</td>'+
+        '<td>'+p.dataPedido+'</td><td>'+p.projeto+'</td><td>'+p.tipoFaturamento+'</td>'+
+        '<td>'+fmtDate(p.criadoEm)+'</td><td>'+(p.numeroNF||'')+'</td>'+
+        '<td><span class="pill '+p.status+'">'+statusLabel+'</span></td>'+
+        '<td><button class="btn secondary" onclick="openEditPedido(\''+p.id+'\')">Editar</button> '+
+        '<button class="btn danger" onclick="removePedido(\''+p.id+'\')">Remover</button></td></tr>';
+    }).join('');
+    var totalLabel = semFiltro ? 'Total (só os exibidos)' : 'Total (filtro atual, '+ordenados.length+' pedido(s))';
+    var totalRow = '<tr><td colspan="3" style="text-align:right;font-weight:600;">'+totalLabel+':</td>'+
+      '<td style="font-weight:600;">'+totalQtd+'</td><td colspan="7"></td></tr>';
+    el.innerHTML = aviso + '<table><thead><tr><th>Escola</th><th>Coleção</th><th>Vol.</th><th>Qtd.</th><th>Data do pedido</th><th>Projeto?</th><th>Tipo fat.</th><th>Data de upload</th><th>NF</th><th>Status</th><th></th></tr></thead><tbody>'+rows+totalRow+'</tbody></table>';
+  }).catch(function(err){
+    el.innerHTML = '<div class="empty">Erro ao buscar pedidos: '+err.message+'</div>';
+    console.error(err);
   });
-
-  if (filtrados.length===0){ el.innerHTML = '<div class="empty">Nenhum pedido encontrado para esse filtro.</div>'; return; }
-
-  var totalQtd = filtrados.reduce(function(acc,p){ return acc + (Number(p.quantidade)||0); }, 0);
-
-  var rows = filtrados.map(function(p){
-    var statusLabel = p.status==='aberto'?'Aberto':p.status==='parcial'?'Parcial':'Concluído';
-    return '<tr><td>'+p.idEscola+'</td><td>'+p.colecao+'</td><td>'+p.volume+'</td><td>'+p.quantidade+'</td>'+
-      '<td>'+p.dataPedido+'</td><td>'+p.projeto+'</td><td>'+p.tipoFaturamento+'</td>'+
-      '<td>'+fmtDate(p.criadoEm)+'</td><td>'+(p.numeroNF||'')+'</td>'+
-      '<td><span class="pill '+p.status+'">'+statusLabel+'</span></td>'+
-      '<td><button class="btn secondary" onclick="openEditPedido(\''+p.id+'\')">Editar</button> '+
-      '<button class="btn danger" onclick="removePedido(\''+p.id+'\')">Remover</button></td></tr>';
-  }).join('');
-  var totalRow = '<tr><td colspan="3" style="text-align:right;font-weight:600;">Total (filtro atual):</td>'+
-    '<td style="font-weight:600;">'+totalQtd+'</td><td colspan="7"></td></tr>';
-  el.innerHTML = '<table><thead><tr><th>Escola</th><th>Coleção</th><th>Vol.</th><th>Qtd.</th><th>Data do pedido</th><th>Projeto?</th><th>Tipo fat.</th><th>Data de upload</th><th>NF</th><th>Status</th><th></th></tr></thead><tbody>'+rows+totalRow+'</tbody></table>';
 }
 
 var EDIT_FIELDS = ['idEscola','colecao','volume','quantidade','dataPedido','projeto','tipoFaturamento'];
@@ -444,15 +486,15 @@ function saveEditPedido(){
   });
   showLoading('Salvando...');
   db.collection('conciliador_pedidos').doc(id).update(updates).then(function(){
-    closeEditModal(); hideLoading();
+    closeEditModal(); hideLoading(); renderPedidos(); refreshSummary();
   }).catch(onError);
 }
 
-var PEDIDOS_COLUMN_MAP = {
-  'id escola':'idEscola','idescola':'idEscola','colecao':'colecao',
-  'volume':'volume','quantidade':'quantidade','data do pedido':'dataPedido',
-  'projeto':'projeto','tipo de faturamento':'tipoFaturamento',
-};
+// Converte valores de data vindos do Excel (podem chegar como objeto Date ou já como texto)
+function excelValueToDateStr(v){
+  if (v instanceof Date && !isNaN(v.getTime())) return v.toLocaleDateString('pt-BR');
+  return v;
+}
 
 // Grava/apaga em lotes menores para não estourar o limite de tamanho/quantidade do Firestore por lote
 function commitInChunks(items, applyToBatch, chunkSize, onProgress){
@@ -461,7 +503,8 @@ function commitInChunks(items, applyToBatch, chunkSize, onProgress){
   for (var i=0;i<items.length;i+=chunkSize) chunks.push(items.slice(i, i+chunkSize));
   var done = 0;
   function next(idx){
-    if (idx>=chunks.length) return Promise.resolve();
+    if (cancelRequested){ cancelRequested = false; return Promise.resolve({cancelled:true, done:done, total:items.length}); }
+    if (idx>=chunks.length) return Promise.resolve({cancelled:false, done:done, total:items.length});
     var batch = db.batch();
     chunks[idx].forEach(function(item){ applyToBatch(batch, item); });
     return batch.commit().then(function(){
@@ -475,35 +518,53 @@ function commitInChunks(items, applyToBatch, chunkSize, onProgress){
 
 function handlePedidosFile(file){
   if (!file) return;
-  showLoading('Lendo base de pedidos...');
+  showLoading('Lendo base de pedidos...', true);
   var reader = new FileReader();
   reader.onload = function(e){
     try{
-      var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
       var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
       if (rows.length<2){ hideLoading(); return; }
       var rawHeaders = rows[0].map(function(h){ return normText(h); });
-      var fieldIdx = {};
-      rawHeaders.forEach(function(h,i){ if (PEDIDOS_COLUMN_MAP[h]) fieldIdx[PEDIDOS_COLUMN_MAP[h]] = i; });
-      var naoReconhecidas = rows[0].filter(function(h,i){ return h && !PEDIDOS_COLUMN_MAP[rawHeaders[i]]; });
+      var idx = {
+        idEscola: rawHeaders.findIndex(function(h){ return h.indexOf('escola')>=0; }),
+        colecao: rawHeaders.findIndex(function(h){ return h.indexOf('colecao')>=0; }),
+        volume: rawHeaders.findIndex(function(h){ return h.indexOf('volume')>=0; }),
+        quantidade: rawHeaders.findIndex(function(h){ return h.indexOf('quant')>=0; }),
+        dataPedido: rawHeaders.findIndex(function(h){ return h.indexOf('data')>=0; }),
+        projeto: rawHeaders.findIndex(function(h){ return h.indexOf('projeto')>=0; }),
+        tipoFaturamento: rawHeaders.findIndex(function(h){ return h.indexOf('faturamento')>=0; }),
+      };
+      var naoReconhecidas = rows[0].filter(function(h,i){ return h && Object.keys(idx).every(function(k){ return idx[k]!==i; }); });
       document.getElementById('pedidosImportWarn').innerHTML = naoReconhecidas.length ? '<div class="warn">Colunas não reconhecidas (ignoradas): '+naoReconhecidas.join(', ')+'</div>' : '';
 
       var objetos = [];
       for (var i=1;i<rows.length;i++){
         var r = rows[i];
         if (!r || r.every(function(c){return c==='' || c==null;})) continue;
-        var idEscola = fieldIdx.idEscola!==undefined ? String(r[fieldIdx.idEscola]||'').trim() : '';
-        var colecao = fieldIdx.colecao!==undefined ? String(r[fieldIdx.colecao]||'').trim() : '';
+        var idEscola = idx.idEscola>=0 ? String(r[idx.idEscola]||'').trim() : '';
+        var colecao = idx.colecao>=0 ? String(r[idx.colecao]||'').trim() : '';
         if (!idEscola || !colecao) continue;
-        var obj = { status:'aberto', recebido:{}, criadoEm: new Date().toISOString(), numeroNF:'' };
-        Object.keys(fieldIdx).forEach(function(field){ obj[field] = r[fieldIdx[field]]; });
+        var obj = {
+          idEscola: idEscola, colecao: colecao,
+          volume: idx.volume>=0 ? String(r[idx.volume]||'').trim() : '',
+          quantidade: idx.quantidade>=0 ? (Number(r[idx.quantidade])||0) : 0,
+          dataPedido: idx.dataPedido>=0 ? excelValueToDateStr(r[idx.dataPedido]) : '',
+          projeto: idx.projeto>=0 ? String(r[idx.projeto]||'').trim() : '',
+          tipoFaturamento: idx.tipoFaturamento>=0 ? String(r[idx.tipoFaturamento]||'').trim() : '',
+          status:'aberto', recebido:{}, criadoEm: new Date().toISOString(), numeroNF:'',
+        };
         objetos.push(obj);
       }
       if (objetos.length===0){ hideLoading(); return; }
       commitInChunks(objetos, function(batch, obj){
         batch.set(db.collection('conciliador_pedidos').doc(), obj);
-      }, 400, function(done, total){ showLoading('Salvando pedidos... ('+done+'/'+total+')'); })
-        .then(hideLoading).catch(onError);
+      }, 400, function(done, total){ showLoading('Salvando pedidos... ('+done+'/'+total+')', true); })
+        .then(function(result){
+          hideLoading();
+          if (result.cancelled) alert('Upload cancelado. '+result.done+' de '+result.total+' pedidos foram salvos antes do cancelamento.');
+          renderPedidos(); refreshSummary();
+        }).catch(onError);
       document.getElementById('pedidosFile').value='';
     } catch(err){ onError(err); }
   };
@@ -513,16 +574,22 @@ function handlePedidosFile(file){
 
 function removePedido(id){
   showLoading('Removendo...');
-  db.collection('conciliador_pedidos').doc(id).delete().then(hideLoading).catch(onError);
+  db.collection('conciliador_pedidos').doc(id).delete().then(function(){
+    hideLoading(); renderPedidos(); refreshSummary();
+  }).catch(onError);
 }
 
 function clearPedidos(){
   if (!confirm('Isso vai apagar TODOS os pedidos cadastrados na base, sem volta. Tem certeza?')) return;
-  showLoading('Zerando base de pedidos...');
+  showLoading('Zerando base de pedidos...', true);
   db.collection('conciliador_pedidos').get().then(function(snap){
     return commitInChunks(snap.docs, function(batch, doc){ batch.delete(doc.ref); }, 400,
-      function(done, total){ showLoading('Zerando base de pedidos... ('+done+'/'+total+')'); });
-  }).then(hideLoading).catch(onError);
+      function(done, total){ showLoading('Zerando base de pedidos... ('+done+'/'+total+')', true); });
+  }).then(function(result){
+    hideLoading();
+    if (result && result.cancelled) alert('Cancelado. '+result.done+' de '+result.total+' pedidos foram removidos antes do cancelamento.');
+    renderPedidos(); refreshSummary();
+  }).catch(onError);
 }
 
 // =====================================================================
@@ -828,12 +895,12 @@ function matchNF(nf, candidatesInput, depara, custos){
   return { status:'conciliada', motivo:'', pedidosAfetados:alocacoes, custoEsperado:custoEsperado };
 }
 
-function applyAllocationsToPedidos(alocacoes, depara, custos, numeroNFNova){
+function applyAllocationsToPedidos(alocacoes, candidatos, depara, custos, numeroNFNova){
   var pedidoIds = Object.keys(alocacoes || {});
   if (pedidoIds.length===0) return Promise.resolve();
   var batch = db.batch();
   pedidoIds.forEach(function(pedidoId){
-    var pedido = STATE.pedidos.filter(function(p){ return String(p.id)===String(pedidoId); })[0];
+    var pedido = candidatos.filter(function(p){ return String(p.id)===String(pedidoId); })[0];
     if (!pedido) return;
     var recebido = Object.assign({}, pedido.recebido||{});
     Object.keys(alocacoes[pedidoId]).forEach(function(sku){ recebido[sku] = (recebido[sku]||0) + alocacoes[pedidoId][sku]; });
@@ -850,10 +917,23 @@ function applyAllocationsToPedidos(alocacoes, depara, custos, numeroNFNova){
 // =====================================================================
 // 10) Processar NFs
 // =====================================================================
-function getEscolaCNPJMap(){
-  var map = {};
-  STATE.escolas.forEach(function(e){ map[normText(e.idEscola)] = onlyDigits(e.cnpj); });
-  return map;
+function getIdsEscolaPorCNPJ(cnpj){
+  var alvo = onlyDigits(cnpj);
+  return STATE.escolas.filter(function(e){ return onlyDigits(e.cnpj)===alvo && alvo; }).map(function(e){ return e.idEscola; });
+}
+
+function buscarCandidatosPorEscolas(idsEscola){
+  if (idsEscola.length===0) return Promise.resolve([]);
+  var promises = idsEscola.map(function(idEscola){
+    return db.collection('conciliador_pedidos').where('idEscola','==',idEscola).get();
+  });
+  return Promise.all(promises).then(function(snaps){
+    var todos = [];
+    snaps.forEach(function(snap){
+      snap.docs.forEach(function(d){ todos.push(Object.assign({id:d.id}, d.data())); });
+    });
+    return todos.filter(function(p){ return p.status!=='concluido'; });
+  });
 }
 
 function handleNFFiles(fileList){
@@ -869,6 +949,7 @@ function processNext(files, i){
     box.textContent = 'Clique para selecionar o(s) XML(s) da NF-e (pode selecionar vários de uma vez)';
     box.parentElement.classList.remove('loading');
     document.getElementById('nfFile').value='';
+    renderPedidos(); refreshSummary();
     return;
   }
   var reader = new FileReader();
@@ -876,22 +957,18 @@ function processNext(files, i){
     var record = { arquivo: files[i].name, processadoEm: new Date().toISOString() };
     try{
       var nf = parseNFeXML(e.target.result);
-      var escolaCnpjMap = getEscolaCNPJMap();
-      var candidates = STATE.pedidos.filter(function(p){
-        var cnpjEscolaPedido = escolaCnpjMap[normText(p.idEscola)] || '';
-        return cnpjEscolaPedido && cnpjEscolaPedido===onlyDigits(nf.cnpjDest) && p.status!=='concluido';
-      });
-      var result = matchNF(nf, candidates, STATE.depara, STATE.custos);
-      Object.assign(record, {
-        chave: nf.chave, numeroNF: nf.numeroNF, cnpjDest: nf.cnpjDest, nomeDest: nf.nomeDest,
-        cnpjEmit: nf.cnpjEmit, nomeEmit: nf.nomeEmit, natOp: nf.natOp, vNF: nf.vNF, infCpl: nf.infCpl,
-        itens: nf.itens, status: result.status, motivo: result.motivo,
-        pedidosAfetados: result.pedidosAfetados, custoEsperado: result.custoEsperado,
-      });
-      var afterMatch = result.status==='conciliada' ? applyAllocationsToPedidos(result.pedidosAfetados, STATE.depara, STATE.custos, nf.numeroNF) : Promise.resolve();
-      afterMatch.then(function(){ return db.collection('conciliador_nfs').add(record); })
-        .then(function(){ processNext(files, i+1); })
-        .catch(onError);
+      var idsEscola = getIdsEscolaPorCNPJ(nf.cnpjDest);
+      buscarCandidatosPorEscolas(idsEscola).then(function(candidates){
+        var result = matchNF(nf, candidates, STATE.depara, STATE.custos);
+        Object.assign(record, {
+          chave: nf.chave, numeroNF: nf.numeroNF, cnpjDest: nf.cnpjDest, nomeDest: nf.nomeDest,
+          cnpjEmit: nf.cnpjEmit, nomeEmit: nf.nomeEmit, natOp: nf.natOp, vNF: nf.vNF, infCpl: nf.infCpl,
+          itens: nf.itens, status: result.status, motivo: result.motivo,
+          pedidosAfetados: result.pedidosAfetados, custoEsperado: result.custoEsperado,
+        });
+        var afterMatch = result.status==='conciliada' ? applyAllocationsToPedidos(result.pedidosAfetados, candidates, STATE.depara, STATE.custos, nf.numeroNF) : Promise.resolve();
+        return afterMatch.then(function(){ return db.collection('conciliador_nfs').add(record); });
+      }).then(function(){ processNext(files, i+1); }).catch(onError);
     } catch(err){
       record.status = 'erro'; record.motivo = 'Falha ao ler o XML: ' + err.message;
       record.itens = []; record.pedidosAfetados = {}; record.vNF = 0; record.custoEsperado = 0;
@@ -901,9 +978,13 @@ function processNext(files, i){
   reader.readAsText(files[i]);
 }
 
+var vincCandidatosCache = {};
+
 function renderNFs(){
   var el = document.getElementById('nfsList');
   if (STATE.nfs.length===0){ el.innerHTML = '<div class="empty">Nenhuma NF processada ainda.</div>'; return; }
+  var opcoesEscola = STATE.escolas.slice().sort(function(a,b){ return normText(a.idEscola).localeCompare(normText(b.idEscola)); })
+    .map(function(e){ return '<option value="'+e.idEscola+'">'+e.idEscola+'</option>'; }).join('');
   el.innerHTML = STATE.nfs.map(function(n){
     var statusLabel = n.status==='conciliada'?'Conciliada':n.status==='pendente'?'Pendente':'Erro';
     var html = '<div class="nfitem"><div class="row" style="margin-bottom:0;align-items:center"><span class="pill '+n.status+'">'+statusLabel+'</span><strong>'+n.arquivo+'</strong>';
@@ -914,31 +995,46 @@ function renderNFs(){
     html += '</div>';
     if (n.motivo) html += '<div class="detail">'+n.motivo+'</div>';
     if (n.status==='pendente'){
-      var options = STATE.pedidos.filter(function(p){return p.status!=='concluido';}).map(function(p){
-        return '<option value="'+p.id+'">'+p.idEscola+' — '+p.colecao+' (v.'+p.volume+')</option>';
-      }).join('');
-      html += '<div class="row" style="margin-top:8px"><div class="field"><label>Vincular manualmente a um pedido</label><select onchange="vincularManual(\''+n.id+'\', this.value)"><option value="" disabled selected>Selecionar pedido</option>'+options+'</select></div></div>';
+      html += '<div class="row" style="margin-top:8px">'+
+        '<div class="field"><label>Escola</label><select id="vinc_escola_'+n.id+'" onchange="carregarPedidosParaVinculo(\''+n.id+'\')"><option value="">Selecionar escola</option>'+opcoesEscola+'</select></div>'+
+        '<div class="field"><label>Pedido</label><select id="vinc_pedido_'+n.id+'" onchange="vincularManual(\''+n.id+'\', this.value)"><option value="">Selecione a escola primeiro</option></select></div>'+
+      '</div>';
     }
     html += '</div>';
     return html;
   }).join('');
 }
 
+function carregarPedidosParaVinculo(nfId){
+  var idEscola = document.getElementById('vinc_escola_'+nfId).value;
+  var selectPedido = document.getElementById('vinc_pedido_'+nfId);
+  if (!idEscola){ selectPedido.innerHTML = '<option value="">Selecione a escola primeiro</option>'; return; }
+  selectPedido.innerHTML = '<option value="">Buscando pedidos...</option>';
+  db.collection('conciliador_pedidos').where('idEscola','==',idEscola).get().then(function(snap){
+    var pedidos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); }).filter(function(p){ return p.status!=='concluido'; });
+    vincCandidatosCache[nfId] = pedidos;
+    if (pedidos.length===0){ selectPedido.innerHTML = '<option value="">Nenhum pedido em aberto para essa escola</option>'; return; }
+    selectPedido.innerHTML = '<option value="" disabled selected>Selecionar pedido</option>' + pedidos.map(function(p){
+      return '<option value="'+p.id+'">'+p.colecao+' (v.'+p.volume+') — qtd '+p.quantidade+'</option>';
+    }).join('');
+  }).catch(onError);
+}
+
 function vincularManual(nfId, pedidoId){
   if (!pedidoId) return;
   showLoading('Vinculando...');
   var nfRow = STATE.nfs.filter(function(n){ return String(n.id)===String(nfId); })[0];
-  var pedido = STATE.pedidos.filter(function(p){ return String(p.id)===String(pedidoId); })[0];
+  var pedido = (vincCandidatosCache[nfId]||[]).filter(function(p){ return String(p.id)===String(pedidoId); })[0];
   if (!nfRow || !pedido){ hideLoading(); return; }
   var nf = { natOp: nfRow.natOp, vNF: nfRow.vNF, itens: nfRow.itens, numeroNF: nfRow.numeroNF };
   var result = matchNF(nf, [pedido], STATE.depara, STATE.custos);
-  var afterMatch = result.status==='conciliada' ? applyAllocationsToPedidos(result.pedidosAfetados, STATE.depara, STATE.custos, nf.numeroNF) : Promise.resolve();
+  var afterMatch = result.status==='conciliada' ? applyAllocationsToPedidos(result.pedidosAfetados, [pedido], STATE.depara, STATE.custos, nf.numeroNF) : Promise.resolve();
   afterMatch.then(function(){
     return db.collection('conciliador_nfs').doc(nfId).update({
       status: result.status, motivo: result.motivo, pedidosAfetados: result.pedidosAfetados,
       custoEsperado: result.custoEsperado, processadoEm: new Date().toISOString(),
     });
-  }).then(hideLoading).catch(onError);
+  }).then(function(){ hideLoading(); renderPedidos(); refreshSummary(); }).catch(onError);
 }
 </script>
 </body>
