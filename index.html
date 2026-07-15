@@ -350,20 +350,28 @@ function showTab(name){
 
 // Contadores via consultas de contagem (count()) — custam 1 leitura cada, não importa o tamanho da base
 function refreshSummary(){
-  var pedidosCol = db.collection('conciliador_pedidos');
-  Promise.all([
-    pedidosCol.where('status','==','aberto').count().get(),
-    pedidosCol.where('status','==','parcial').count().get(),
-    pedidosCol.where('status','==','concluido').count().get(),
-  ]).then(function(results){
-    var abertos = results[0].data().count;
-    var parciais = results[1].data().count;
-    var concluidos = results[2].data().count;
+  db.doc('conciliador_reference/stats').get().then(function(doc){
+    var d = doc.exists ? doc.data() : {};
+    var abertos = d.abertos||0, parciais = d.parciais||0, concluidos = d.concluidos||0;
     var conciliadas = STATE.nfs.filter(function(n){return n.status==='conciliada';}).length;
     var revisao = STATE.nfs.filter(function(n){return n.status!=='conciliada';}).length;
     var stats = [[abertos,'Pedidos abertos'],[parciais,'Parcialmente atendidos'],[concluidos,'Concluídos'],[conciliadas,'NFs conciliadas'],[revisao,'NFs pendentes de revisão']];
-    document.getElementById('summary').innerHTML = stats.map(function(s){ return '<div class="stat"><div class="n">'+s[0]+'</div><div class="l">'+s[1]+'</div></div>'; }).join('');
-  }).catch(function(err){ console.error('Falha ao contar pedidos', err); });
+    document.getElementById('summary').innerHTML = stats.map(function(s){ return '<div class="stat"><div class="n">'+s[0]+'</div><div class="l">'+s[1]+'</div></div>'; }).join('')
+      + '<button class="btn secondary" style="align-self:center" onclick="recalcularContadores()" title="Recalcula do zero lendo a base inteira — use só se os números parecerem errados">Recalcular</button>';
+  }).catch(function(err){ console.error('Falha ao ler contadores', err); });
+}
+
+// Ação manual de manutenção: relê a base inteira e corrige o contador, caso ele saia de sincronia por algum motivo
+function recalcularContadores(){
+  showLoading('Recalculando contadores (pode demorar com muitos pedidos)...');
+  var col = db.collection('conciliador_pedidos');
+  Promise.all([
+    col.where('status','==','aberto').get(),
+    col.where('status','==','parcial').get(),
+    col.where('status','==','concluido').get(),
+  ]).then(function(snaps){
+    return db.doc('conciliador_reference/stats').set({ abertos: snaps[0].size, parciais: snaps[1].size, concluidos: snaps[2].size });
+  }).then(function(){ hideLoading(); refreshSummary(); }).catch(onError);
 }
 
 // =====================================================================
@@ -563,8 +571,10 @@ function handlePedidosFile(file){
         .then(function(result){
           hideLoading();
           if (result.cancelled) alert('Upload cancelado. '+result.done+' de '+result.total+' pedidos foram salvos antes do cancelamento.');
-          renderPedidos(); refreshSummary();
-        }).catch(onError);
+          var incremento = {};
+          incremento['abertos'] = firebase.firestore.FieldValue.increment(result.done);
+          return db.doc('conciliador_reference/stats').set(incremento, {merge:true});
+        }).then(function(){ renderPedidos(); refreshSummary(); }).catch(onError);
       document.getElementById('pedidosFile').value='';
     } catch(err){ onError(err); }
   };
@@ -574,7 +584,16 @@ function handlePedidosFile(file){
 
 function removePedido(id){
   showLoading('Removendo...');
-  db.collection('conciliador_pedidos').doc(id).delete().then(function(){
+  var ref = db.collection('conciliador_pedidos').doc(id);
+  ref.get().then(function(doc){
+    var statusAtual = doc.exists ? (doc.data().status||'aberto') : null;
+    return ref.delete().then(function(){
+      if (!statusAtual) return;
+      var incremento = {};
+      incremento[statusAtual==='aberto'?'abertos':statusAtual==='parcial'?'parciais':'concluidos'] = firebase.firestore.FieldValue.increment(-1);
+      return db.doc('conciliador_reference/stats').set(incremento, {merge:true});
+    });
+  }).then(function(){
     hideLoading(); renderPedidos(); refreshSummary();
   }).catch(onError);
 }
@@ -588,6 +607,8 @@ function clearPedidos(){
   }).then(function(result){
     hideLoading();
     if (result && result.cancelled) alert('Cancelado. '+result.done+' de '+result.total+' pedidos foram removidos antes do cancelamento.');
+    return db.doc('conciliador_reference/stats').set({ abertos:0, parciais:0, concluidos:0 });
+  }).then(function(){
     renderPedidos(); refreshSummary();
   }).catch(onError);
 }
@@ -899,6 +920,8 @@ function applyAllocationsToPedidos(alocacoes, candidatos, depara, custos, numero
   var pedidoIds = Object.keys(alocacoes || {});
   if (pedidoIds.length===0) return Promise.resolve();
   var batch = db.batch();
+  var diff = { abertos:0, parciais:0, concluidos:0 };
+  var campoPorStatus = { aberto:'abertos', parcial:'parciais', concluido:'concluidos' };
   pedidoIds.forEach(function(pedidoId){
     var pedido = candidatos.filter(function(p){ return String(p.id)===String(pedidoId); })[0];
     if (!pedido) return;
@@ -909,8 +932,17 @@ function applyAllocationsToPedidos(alocacoes, candidatos, depara, custos, numero
     var novoStatus = totalRestante<=0.0001 ? 'concluido' : 'parcial';
     var nfsExistentes = (pedido.numeroNF||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
     if (numeroNFNova && nfsExistentes.indexOf(numeroNFNova)===-1) nfsExistentes.push(numeroNFNova);
+    if (novoStatus !== pedido.status){
+      diff[campoPorStatus[pedido.status] || 'abertos'] -= 1;
+      diff[campoPorStatus[novoStatus]] += 1;
+    }
     batch.update(db.collection('conciliador_pedidos').doc(pedidoId), { recebido: recebido, status: novoStatus, numeroNF: nfsExistentes.join(', ') });
   });
+  var incremento = {};
+  Object.keys(diff).forEach(function(k){ if (diff[k]!==0) incremento[k] = firebase.firestore.FieldValue.increment(diff[k]); });
+  if (Object.keys(incremento).length>0){
+    batch.set(db.doc('conciliador_reference/stats'), incremento, {merge:true});
+  }
   return batch.commit();
 }
 
