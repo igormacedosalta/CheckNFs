@@ -700,7 +700,7 @@ function handlePedidosFile(file){
           dataPedido: idx.dataPedido>=0 ? excelValueToDateStr(r[idx.dataPedido]) : '',
           projeto: idx.projeto>=0 ? String(r[idx.projeto]||'').trim() : '',
           tipoFaturamento: idx.tipoFaturamento>=0 ? capitalizarPrimeira(r[idx.tipoFaturamento]) : '',
-          status:'aberto', recebido:{}, criadoEm: new Date().toISOString(), numeroNF:'', numeroPedidoFornecedor:'', saldoVinculado: 0,
+          status:'aberto', recebido:{}, criadoEm: new Date().toISOString(), numeroNF:'', numeroPedidoFornecedor:'', coberturaSku:{},
         };
         objetos.push(obj);
       }
@@ -1098,12 +1098,13 @@ function traduzirTipoFaturamento(natOp, faturamentoMap){
 // =====================================================================
 // 7d) Conciliação de Pedidos (planilha padrão POR SKU com números do fornecedor)
 // =====================================================================
-// Modelo: cada pedido nosso tem uma "quantidade" total e um "saldoVinculado" (quanto já
-// foi associado a número(s) de pedido do fornecedor até agora). A diferença é o saldo em
-// aberto — isso permite que a conciliação aconteça aos poucos, em uploads separados no
-// tempo, sem exigir que tudo feche de uma vez só.
+// Cada pedido nosso guarda uma "cobertura por SKU" (coberturaSku: {sku: quantidade já
+// atribuída a algum número do fornecedor}). A alocação acontece SKU a SKU (não pedido
+// inteiro por vez) — isso cobre tanto divisão por QUANTIDADE ao longo do tempo (ex: 5 hoje,
+// 10 depois) quanto divisão por SKU (ex: uma coleção com vários materiais, cada um chegando
+// num número de pedido diferente do fornecedor).
 
-// Vetor de SKUs para 1 unidade da coleção/volume de um pedido (antes de multiplicar pela quantidade)
+// Vetor de SKUs para 1 unidade da coleção/volume de um pedido
 function unidadeVetorPedido(p){
   var linhas = STATE.depara.filter(function(d){
     return normText(d.colecao)===normText(p.colecao) && String(d.volume).trim()===String(p.volume).trim();
@@ -1112,40 +1113,21 @@ function unidadeVetorPedido(p){
   linhas.forEach(function(d){ v[normText(d.sku)] = (v[normText(d.sku)]||0) + 1; });
   return v;
 }
-function escalarVetor(unidade, qtd){
-  var v = {};
-  Object.keys(unidade).forEach(function(k){ v[k] = unidade[k]*qtd; });
-  return v;
-}
-function somarVetores(lista){
-  var total = {};
-  lista.forEach(function(v){ Object.keys(v).forEach(function(sku){ total[sku] = (total[sku]||0) + v[sku]; }); });
-  return total;
-}
-function vetoresIguais(a, b){
-  var chaves = {};
-  Object.keys(a).forEach(function(k){ chaves[k]=1; });
-  Object.keys(b).forEach(function(k){ chaves[k]=1; });
-  return Object.keys(chaves).every(function(k){ return Math.abs((a[k]||0)-(b[k]||0)) < 0.0001; });
-}
-// b "cabe" dentro de a? (todos os SKUs de b existem em a com quantidade suficiente)
-function vetorCabe(b, a){
-  return Object.keys(b).every(function(k){ return (a[k]||0) + 0.0001 >= b[k]; });
+
+// Um pedido não pode ter sido "atendido" numa data anterior a quando ele foi feito —
+// impossibilidade lógica. Sem data confiável de algum dos lados, não bloqueia.
+function pedidoPodeSerAnterior(dataNossaStr, dataFornStr){
+  var nossa = parseBRDate(dataNossaStr), forn = parseBRDate(dataFornStr);
+  if (!nossa || !forn) return true;
+  return forn.getTime() >= nossa.getTime();
 }
 
-// Testa se o vetor de uma ordem do fornecedor é EXATAMENTE uma fração (X unidades) da coleção
-// de um pedido — ou seja, os mesmos SKUs, nas mesmas proporções, sem sobra nem SKU estranho.
-// Devolve X (quantidade equivalente) ou null se não for uma fração pura dessa coleção.
-function quantidadeEquivalente(unidade, ordemVetor){
-  var chavesUnidade = Object.keys(unidade).filter(function(k){ return unidade[k]>0; });
-  if (chavesUnidade.length===0) return null;
-  if (!Object.keys(ordemVetor).every(function(k){ return unidade[k]!==undefined; })) return null; // SKU que não pertence a essa coleção
-  var ref = chavesUnidade[0];
-  if (!ordemVetor[ref]) return null;
-  var X = ordemVetor[ref] / unidade[ref];
-  if (X <= 0.0001) return null;
-  var bate = chavesUnidade.every(function(k){ return Math.abs((ordemVetor[k]||0) - unidade[k]*X) < 0.0001; });
-  return bate ? X : null;
+function necessidadeRestante(p, sku){
+  var unidadeQtd = p._unidade[sku];
+  if (!unidadeQtd) return 0;
+  var necessarioTotal = unidadeQtd * (Number(p.quantidade)||0);
+  var jaCoberto = (p._cobertura[sku]||0);
+  return Math.max(0, necessarioTotal - jaCoberto);
 }
 
 function handleConcPedidosFile(file){
@@ -1203,9 +1185,7 @@ function conciliarPedidosFornecedor(linhasSku){
   Promise.all(promises).then(function(snaps){
     var nossos = [];
     snaps.forEach(function(snap){ snap.docs.forEach(function(d){ nossos.push(Object.assign({id:d.id}, d.data())); }); });
-    // entram na conciliação pedidos não concluídos que AINDA tenham saldo sem vincular
-    // (mesmo que já tenham algum número parcial de uma conciliação anterior)
-    nossos = nossos.filter(function(p){ return p.status!=='concluido' && ((Number(p.quantidade)||0) - (Number(p.saldoVinculado)||0)) > 0.0001; });
+    nossos = nossos.filter(function(p){ return p.status!=='concluido'; });
 
     // monta "ordens do fornecedor": agrupa as linhas de SKU por escola + número do pedido
     var ordensForn = {};
@@ -1214,138 +1194,90 @@ function conciliarPedidosFornecedor(linhasSku){
       if (!ordensForn[k]) ordensForn[k] = { idEscola: l.idEscola, numeroPedido: l.numeroPedido, dataFornecedor: l.dataFornecedor, vetor: {} };
       ordensForn[k].vetor[normText(l.sku)] = (ordensForn[k].vetor[normText(l.sku)]||0) + l.quantidade;
     });
+    var ordens = Object.keys(ordensForn).map(function(k){ return ordensForn[k]; })
+      .sort(function(a,b){ return (parseBRDate(a.dataFornecedor)||0) - (parseBRDate(b.dataFornecedor)||0); });
 
-    var acoesPorPedido = {}; // pedidoId -> { pedido, numerosAdicionados:[], saldoAplicado }
+    var acoesPorPedido = {}; // pedidoId -> { pedido, numeros:Set, resumos:[] }
     var pendencias = [];
 
-    function registrarAplicacao(pedido, numero, quantidadeAplicada){
-      if (!acoesPorPedido[pedido.id]) acoesPorPedido[pedido.id] = { pedido: pedido, numeros: [], saldoAplicado: 0, resumos: [] };
-      acoesPorPedido[pedido.id].numeros.push(numero);
-      acoesPorPedido[pedido.id].saldoAplicado += quantidadeAplicada;
-      pedido._saldoRestante -= quantidadeAplicada;
+    function registrar(pedido, numero, sku, qtd){
+      if (!acoesPorPedido[pedido.id]) acoesPorPedido[pedido.id] = { pedido: pedido, numeros: [], resumos: [] };
+      if (acoesPorPedido[pedido.id].numeros.indexOf(numero)===-1) acoesPorPedido[pedido.id].numeros.push(numero);
+      pedido._cobertura[sku] = (pedido._cobertura[sku]||0) + qtd;
     }
 
     var porEscola = {};
-    Object.keys(ordensForn).forEach(function(k){
-      var o = ordensForn[k];
-      (porEscola[normText(o.idEscola)] = porEscola[normText(o.idEscola)]||[]).push(o);
-    });
+    ordens.forEach(function(o){ (porEscola[normText(o.idEscola)] = porEscola[normText(o.idEscola)]||[]).push(o); });
 
     Object.keys(porEscola).forEach(function(escKey){
-      var ordens = porEscola[escKey];
       var meus = nossos.filter(function(p){ return normText(p.idEscola)===escKey; })
-        .map(function(p){
-          var unidade = unidadeVetorPedido(p);
-          var saldoRestante = (Number(p.quantidade)||0) - (Number(p.saldoVinculado)||0);
-          return Object.assign({}, p, { _unidade: unidade, _saldoRestante: saldoRestante });
-        })
-        .filter(function(p){ return Object.keys(p._unidade).length>0; })
-        .sort(function(a,b){ return ordemDoPedido(a)-ordemDoPedido(b); });
+        .map(function(p){ return Object.assign({}, p, { _unidade: unidadeVetorPedido(p), _cobertura: Object.assign({}, p.coberturaSku||{}) }); })
+        .filter(function(p){ return Object.keys(p._unidade).length>0; });
 
       if (meus.length===0){
-        ordens.forEach(function(o){ pendencias.push({ ordem:o, motivo:'Nenhum pedido em aberto (com saldo pendente) para essa escola, ou o De-para não cobre a coleção.' }); });
+        porEscola[escKey].forEach(function(o){ pendencias.push({ ordem:o, motivo:'Nenhum pedido em aberto para essa escola, ou o De-para não cobre a coleção.', diagnostico: [] }); });
         return;
       }
 
-      function vetorSaldo(p){ return escalarVetor(p._unidade, p._saldoRestante); }
+      porEscola[escKey].forEach(function(o){
+        var falhaSku = null;
+        var planoDeAlocacao = []; // {pedido, sku, qtd}
 
-      // PASSO 1 — match exato: uma ordem do fornecedor = combinação (1 a 4) de saldos nossos que somam igual
-      ordens.forEach(function(o){
-        if (o._usado) return;
-        var candidatas = meus.filter(function(m){
-            return m._saldoRestante>0.0001 && pedidoPodeSerAnterior(m.dataPedido, o.dataFornecedor) && vetorCabe(vetorSaldo(m), o.vetor);
-          })
-          .map(function(m){ return { ref:m, _vetor: vetorSaldo(m) }; })
-          .sort(function(a,b){ return ordemDoPedido(a.ref)-ordemDoPedido(b.ref); });
-        var combo = encontrarComboVetores(candidatas, o.vetor);
-        if (combo){
-          o._usado = true;
-          combo.forEach(function(c){
-            registrarAplicacao(c.ref, o.numeroPedido, c.ref._saldoRestante); // combo exato consome o saldo inteiro de cada um
-            var extra = combo.length>1 ? ' (pedidos juntados pelo fornecedor)' : '';
-            acoesPorPedido[c.ref.id].resumos.push(c.ref.idEscola+' | '+c.ref.colecao+' v'+c.ref.volume+' | qtd aplicada '+acoesPorPedido[c.ref.id].saldoAplicado+' → nº '+o.numeroPedido+extra);
+        Object.keys(o.vetor).forEach(function(sku){
+          if (falhaSku) return;
+          var necessario = o.vetor[sku];
+          var candidatos = meus.filter(function(m){
+            return m._unidade[sku]!==undefined && necessidadeRestante(m, sku) > 0.0001 && pedidoPodeSerAnterior(m.dataPedido, o.dataFornecedor);
           });
-        }
-      });
-
-      // PASSO 2 — quebra: uma linha nossa (com saldo) é fechada por uma combinação (2 a 4) de ordens do fornecedor
-      meus.filter(function(m){ return m._saldoRestante>0.0001; }).forEach(function(m){
-        var ordensLivres = ordens.filter(function(o){ return !o._usado && pedidoPodeSerAnterior(m.dataPedido, o.dataFornecedor) && vetorCabe(o.vetor, vetorSaldo(m)); })
-          .sort(function(a,b){ return parseBRDate(a.dataFornecedor||'')-parseBRDate(b.dataFornecedor||''); });
-        var combo = encontrarComboVetores(ordensLivres.map(function(o){ return { _vetor: o.vetor, _ref:o }; }), vetorSaldo(m));
-        if (combo && combo.length>=2){
-          combo.forEach(function(c){ c._ref._usado = true; });
-          var somaAplicada = m._saldoRestante;
-          combo.forEach(function(c){ registrarAplicacao(m, c._ref.numeroPedido, 0); }); // zera incremento aqui, aplica tudo de uma vez abaixo
-          acoesPorPedido[m.id].saldoAplicado = somaAplicada; m._saldoRestante = 0;
-          var numeros = combo.map(function(c){ return c._ref.numeroPedido; });
-          acoesPorPedido[m.id].resumos.push(m.idEscola+' | '+m.colecao+' v'+m.volume+' | qtd aplicada '+somaAplicada+' → nºs '+numeros.join(', ')+' (pedido dividido pelo fornecedor)');
-        }
-      });
-
-      // PASSO 3 — vínculo parcial: ordem que corresponde a uma FRAÇÃO do saldo de um único pedido
-      // (cobre o caso de o fornecedor mandar aos poucos, em uploads separados no tempo)
-      ordens.filter(function(o){ return !o._usado; }).forEach(function(o){
-        var candidato = meus.filter(function(m){ return m._saldoRestante>0.0001 && pedidoPodeSerAnterior(m.dataPedido, o.dataFornecedor); })
-          .map(function(m){ return { ref:m, X: quantidadeEquivalente(m._unidade, o.vetor) }; })
-          .filter(function(c){ return c.X!==null && c.X <= c.ref._saldoRestante + 0.0001; })
-          .sort(function(a,b){ return ordemDoPedido(a.ref)-ordemDoPedido(b.ref); })[0];
-        if (candidato){
-          o._usado = true;
-          registrarAplicacao(candidato.ref, o.numeroPedido, candidato.X);
-          var completo = candidato.ref._saldoRestante<=0.0001;
-          acoesPorPedido[candidato.ref.id].resumos.push(candidato.ref.idEscola+' | '+candidato.ref.colecao+' v'+candidato.ref.volume+' | qtd aplicada '+candidato.X+' → nº '+o.numeroPedido+(completo?' (fecha o pedido)':' (parcial — ainda restam '+candidato.ref._saldoRestante+' sem vincular)'));
-        }
-      });
-
-      ordens.filter(function(o){ return !o._usado; }).forEach(function(o){
-        var diagnostico = meus.map(function(m){
-          var podeSerAnterior = pedidoPodeSerAnterior(m.dataPedido, o.dataFornecedor);
-          var cabe = vetorCabe(vetorSaldo(m), o.vetor) || quantidadeEquivalente(m._unidade, o.vetor)!==null;
-          var motivo = m._saldoRestante<=0.0001 ? 'já com saldo totalmente vinculado'
-            : !podeSerAnterior ? 'pedido feito em '+m.dataPedido+', depois da resposta do fornecedor ('+o.dataFornecedor+') — não pode ser esse'
-            : !cabe ? 'quantidade/SKU não bate com o saldo em aberto desse pedido'
-            : 'passou nos filtros, mas não fechou em nenhuma combinação';
-          return { idEscola:m.idEscola, colecao:m.colecao, volume:m.volume, quantidade:m.quantidade, saldoRestante:m._saldoRestante, dataPedido:m.dataPedido, motivo:motivo };
+          // prioridade: um único pedido cuja necessidade restante bate EXATAMENTE
+          var exato = candidatos.filter(function(m){ return Math.abs(necessidadeRestante(m, sku) - necessario) < 0.0001; })[0];
+          if (exato){
+            planoDeAlocacao.push({ pedido: exato, sku: sku, qtd: necessario });
+            return;
+          }
+          // senão, consome o(s) pedido(s) com necessidade restante, mais antigo primeiro, podendo dividir
+          candidatos = candidatos.slice().sort(function(a,b){ return ordemDoPedido(a)-ordemDoPedido(b); });
+          var restante = necessario;
+          var consumoSimulado = {}; // id -> quanto já foi reservado nesta simulação, pra não estourar o mesmo pedido 2x
+          candidatos.forEach(function(m){
+            if (restante<=0.0001) return;
+            var disponivel = necessidadeRestante(m, sku) - (consumoSimulado[m.id]||0);
+            if (disponivel<=0.0001) return;
+            var usar = Math.min(disponivel, restante);
+            planoDeAlocacao.push({ pedido: m, sku: sku, qtd: usar });
+            consumoSimulado[m.id] = (consumoSimulado[m.id]||0) + usar;
+            restante -= usar;
+          });
+          if (restante > 0.0001) falhaSku = sku;
         });
-        pendencias.push({ ordem:o, motivo:'Não achei combinação de SKUs/quantidades que feche com os pedidos em aberto.', diagnostico: diagnostico });
+
+        if (falhaSku){
+          var diagnostico = meus.map(function(m){
+            var podeSerAnterior = pedidoPodeSerAnterior(m.dataPedido, o.dataFornecedor);
+            var temSku = m._unidade[falhaSku]!==undefined;
+            var motivo = !temSku ? 'esse pedido não usa o SKU '+falhaSku+' (confira o De-para)'
+              : !podeSerAnterior ? 'pedido feito em '+m.dataPedido+', depois da resposta do fornecedor ('+o.dataFornecedor+') — não pode ser esse'
+              : necessidadeRestante(m, falhaSku)<=0.0001 ? 'esse SKU já está totalmente coberto nesse pedido'
+              : 'ainda precisa de '+necessidadeRestante(m, falhaSku)+' unidades desse SKU, mas não fechou com o que sobrou pra alocar';
+            return { idEscola:m.idEscola, colecao:m.colecao, volume:m.volume, quantidade:m.quantidade, dataPedido:m.dataPedido, motivo:motivo };
+          });
+          pendencias.push({ ordem:o, motivo:'O SKU '+falhaSku+' (qtd '+o.vetor[falhaSku]+') não fechou com nenhum pedido em aberto dessa escola.', diagnostico: diagnostico });
+          return;
+        }
+
+        // todos os SKUs da ordem fecharam — aplica de verdade
+        planoDeAlocacao.forEach(function(a){ registrar(a.pedido, o.numeroPedido, a.sku, a.qtd); });
+        var pedidosEnvolvidos = Array.from(new Set(planoDeAlocacao.map(function(a){ return a.pedido.id; })));
+        pedidosEnvolvidos.forEach(function(pid){
+          var pedido = meus.filter(function(m){ return m.id===pid; })[0];
+          var completo = Object.keys(pedido._unidade).every(function(sku){ return necessidadeRestante(pedido, sku)<=0.0001; });
+          acoesPorPedido[pid].resumos.push(pedido.idEscola+' | '+pedido.colecao+' v'+pedido.volume+' | recebeu nº '+o.numeroPedido+(completo?' (pedido totalmente vinculado)':' (parcial — ainda faltam SKUs/quantidades)'));
+        });
       });
     });
 
     executarAcoesConciliacao(acoesPorPedido, pendencias);
   }).catch(onError);
-}
-
-// Procura um subconjunto (1 a 4 itens, cada um com ._vetor) cuja soma de vetores seja exatamente o alvo
-function encontrarComboVetores(itens, alvo){
-  var n = itens.length;
-  if (n===0) return null;
-  var melhor = null;
-  function busca(idx, atual, soma){
-    if (melhor) return;
-    if (atual.length>=1 && vetoresIguais(soma, alvo)){ melhor = atual.slice(); return; }
-    if (idx>=n || atual.length>=4) return;
-    var item = itens[idx];
-    var novaSoma = somarVetores([soma, item._vetor]);
-    if (vetorCabe(novaSoma, alvo)) busca(idx+1, atual.concat([item]), novaSoma);
-    busca(idx+1, atual, soma);
-  }
-  busca(0, [], {});
-  return melhor;
-}
-
-// Um pedido não pode ter sido "atendido" numa data anterior a quando ele foi feito —
-// isso é uma impossibilidade lógica (o fornecedor não confirma algo que ainda nem existia).
-// Sem data confiável de algum dos lados, não bloqueia (deixa a decisão pra outros critérios).
-function pedidoPodeSerAnterior(dataNossaStr, dataFornStr){
-  var nossa = parseBRDate(dataNossaStr), forn = parseBRDate(dataFornStr);
-  if (!nossa || !forn) return true;
-  return forn.getTime() >= nossa.getTime();
-}
-
-
-function numerosParaArray(str){
-  return (str||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
 }
 
 function executarAcoesConciliacao(acoesPorPedido, pendencias){
@@ -1364,11 +1296,10 @@ function executarAcoesConciliacao(acoesPorPedido, pendencias){
     var a = acoesPorPedido[id];
     var atuais = numerosParaArray(a.pedido.numeroPedidoFornecedor);
     var novos = atuais.concat(a.numeros).filter(function(v,i,arr){ return arr.indexOf(v)===i; });
-    var novoSaldo = (Number(a.pedido.saldoVinculado)||0) + a.saldoAplicado;
     batch.update(db.collection('conciliador_pedidos').doc(id), {
       numeroPedidoFornecedor: novos.join(', '),
       numerosPedidoArray: novos,
-      saldoVinculado: novoSaldo,
+      coberturaSku: a.pedido._cobertura,
     });
   });
   batch.commit().then(function(){
@@ -1376,6 +1307,10 @@ function executarAcoesConciliacao(acoesPorPedido, pendencias){
     renderResultadoConciliacao(resumosParaExibir, pendencias);
     renderPedidos(); refreshSummary();
   }).catch(onError);
+}
+
+function numerosParaArray(str){
+  return (str||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
 }
 
 function renderResultadoConciliacao(resumos, pendencias){
@@ -1396,7 +1331,7 @@ function renderResultadoConciliacao(resumos, pendencias){
       if (pd.diagnostico && pd.diagnostico.length>0){
         diagHtml = '<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:var(--text-muted)">Ver pedidos considerados e por que não bateram</summary>'+
           '<div style="margin-top:6px">'+pd.diagnostico.map(function(d){
-            return '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--row-border)">'+d.colecao+' v'+d.volume+' | qtd total '+d.quantidade+' | saldo em aberto '+d.saldoRestante+' | data '+d.dataPedido+' — <em>'+d.motivo+'</em></div>';
+            return '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--row-border)">'+d.colecao+' v'+d.volume+' | qtd total '+d.quantidade+' | data '+d.dataPedido+' — <em>'+d.motivo+'</em></div>';
           }).join('')+'</div></details>';
       }
       return '<div class="detail" style="margin-top:4px"><strong>'+o.idEscola+' | nº '+o.numeroPedido+' | data forn. '+(o.dataFornecedor||'—')+' | SKUs: '+skus+'</strong><br>'+pd.motivo+diagHtml+'</div>';
