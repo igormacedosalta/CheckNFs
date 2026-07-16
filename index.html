@@ -140,6 +140,7 @@
     <button class="tab" data-tab="depara" onclick="showTab('depara')">De-para SKU</button>
     <button class="tab" data-tab="custos" onclick="showTab('custos')">Custos SKU</button>
     <button class="tab" data-tab="faturamento" onclick="showTab('faturamento')">De-para Faturamento</button>
+    <button class="tab" data-tab="concpedidos" onclick="showTab('concpedidos')">Conciliação de Pedidos</button>
     <button class="tab" data-tab="nfs" onclick="showTab('nfs')">Conciliação de NFs</button>
   </div>
 
@@ -238,6 +239,16 @@
       <div class="row" style="margin-bottom:0"><div class="field" style="min-width:280px"><label>Buscar</label><input id="busca_faturamento" placeholder="Buscar..." oninput="renderFaturamento()"></div></div>
     </div>
     <div class="card"><div id="faturamentoTable"></div></div>
+  </div>
+
+  <div id="tab-concpedidos" class="tabcontent" style="display:none">
+    <div class="card">
+      <div class="filebox" onclick="document.getElementById('concPedidosFile').click()">Clique para subir a planilha padrão de conciliação (dados do fornecedor no modelo padrão)</div>
+      <input type="file" id="concPedidosFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleConcPedidosFile(this.files[0])">
+      <div class="hint">Colunas do modelo padrão (por SKU): ID Escola, SKU, Quantidade, Nº do pedido, Data do fornecedor. A ferramenta expande seus pedidos em SKUs (via De-para) e vincula os números automaticamente — inclusive quando o fornecedor agrega SKUs compartilhados entre coleções, divide um pedido em vários números (físico/digital ou ruptura) ou junta pedidos de dias próximos num número só.</div>
+      <div id="concPedidosWarn"></div>
+    </div>
+    <div class="card"><div id="concPedidosResultado"><div class="empty">Nenhuma conciliação processada ainda nesta sessão.</div></div></div>
   </div>
 
   <div id="tab-nfs" class="tabcontent" style="display:none">
@@ -382,7 +393,7 @@ function startListeners(){
 }
 
 function showTab(name){
-  ['pedidos','escolas','depara','custos','faturamento','nfs'].forEach(function(t){
+  ['pedidos','escolas','depara','custos','faturamento','concpedidos','nfs'].forEach(function(t){
     document.getElementById('tab-'+t).style.display = (t===name)?'block':'none';
     document.querySelector('.tab[data-tab="'+t+'"]').classList.toggle('active', t===name);
   });
@@ -553,11 +564,19 @@ function renderPedidosFromCache(){
 
   var rows = visiveis.map(function(p){
     var statusLabel = p.status==='aberto'?'Aberto':p.status==='parcial'?'Parcial':'Concluído';
+    var editandoNumero = !!editandoNumeroPedido[p.id];
+    var celulaNumero;
+    if (p.numeroPedidoFornecedor && !editandoNumero){
+      celulaNumero = '<span>'+p.numeroPedidoFornecedor+'</span> '+
+        '<button class="btn secondary" onclick="editarNumeroPedido(\''+p.id+'\')">Editar</button>';
+    } else {
+      celulaNumero = '<input id="np_'+p.id+'" value="'+(p.numeroPedidoFornecedor||'')+'" style="width:110px"> '+
+        '<button class="btn secondary" onclick="salvarNumeroPedido(\''+p.id+'\')">Salvar</button>';
+    }
     return '<tr><td>'+p.idEscola+'</td><td>'+p.colecao+'</td><td>'+p.volume+'</td><td>'+p.quantidade+'</td>'+
       '<td>'+p.dataPedido+'</td><td>'+p.projeto+'</td><td>'+capitalizarPrimeira(p.tipoFaturamento)+'</td>'+
       '<td>'+fmtDate(p.criadoEm)+'</td>'+
-      '<td><input id="np_'+p.id+'" value="'+(p.numeroPedidoFornecedor||'')+'" style="width:110px"> '+
-      '<button class="btn secondary" onclick="salvarNumeroPedido(\''+p.id+'\')">Salvar</button></td>'+
+      '<td>'+celulaNumero+'</td>'+
       '<td>'+(p.numeroNF||'')+'</td>'+
       '<td><span class="pill '+p.status+'">'+statusLabel+'</span></td>'+
       '<td><button class="btn secondary" onclick="openEditPedido(\''+p.id+'\')">Editar</button> '+
@@ -699,15 +718,25 @@ function handlePedidosFile(file){
   reader.readAsArrayBuffer(file);
 }
 
+var editandoNumeroPedido = {};
+
+function editarNumeroPedido(id){
+  editandoNumeroPedido[id] = true;
+  renderPedidosFromCache();
+}
+
 function salvarNumeroPedido(id){
   var el = document.getElementById('np_'+id);
   if (!el) return;
   var valor = el.value.trim();
+  var arr = valor.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
   showLoading('Salvando número do pedido...');
-  db.collection('conciliador_pedidos').doc(id).update({ numeroPedidoFornecedor: valor }).then(function(){
+  db.collection('conciliador_pedidos').doc(id).update({ numeroPedidoFornecedor: arr.join(', '), numerosPedidoArray: arr }).then(function(){
     var p = escolaPedidosCache.filter(function(x){ return String(x.id)===String(id); })[0];
-    if (p) p.numeroPedidoFornecedor = valor;
+    if (p){ p.numeroPedidoFornecedor = arr.join(', '); p.numerosPedidoArray = arr; }
+    editandoNumeroPedido[id] = false;
     hideLoading();
+    renderPedidosFromCache();
   }).catch(onError);
 }
 
@@ -1029,6 +1058,236 @@ function traduzirTipoFaturamento(natOp, faturamentoMap){
   return row ? row.tipoPedido : natOp;
 }
 // =====================================================================
+// 7d) Conciliação de Pedidos (planilha padrão POR SKU com números do fornecedor)
+// =====================================================================
+var TOLERANCIA_DIAS_FORNECEDOR = 7; // data do fornecedor pode ser até X dias DEPOIS da nossa
+
+// Expande uma linha de pedido nossa em um "vetor" de SKUs esperados: { sku: quantidade }
+function vetorDoPedido(p){
+  var linhas = STATE.depara.filter(function(d){
+    return normText(d.colecao)===normText(p.colecao) && String(d.volume).trim()===String(p.volume).trim();
+  });
+  var v = {};
+  linhas.forEach(function(d){ v[normText(d.sku)] = (v[normText(d.sku)]||0) + (Number(p.quantidade)||0); });
+  return v;
+}
+function somarVetores(lista){
+  var total = {};
+  lista.forEach(function(v){ Object.keys(v).forEach(function(sku){ total[sku] = (total[sku]||0) + v[sku]; }); });
+  return total;
+}
+function vetoresIguais(a, b){
+  var chaves = {};
+  Object.keys(a).forEach(function(k){ chaves[k]=1; });
+  Object.keys(b).forEach(function(k){ chaves[k]=1; });
+  return Object.keys(chaves).every(function(k){ return Math.abs((a[k]||0)-(b[k]||0)) < 0.0001; });
+}
+// b "cabe" dentro de a? (todos os SKUs de b existem em a com quantidade suficiente)
+function vetorCabe(b, a){
+  return Object.keys(b).every(function(k){ return (a[k]||0) + 0.0001 >= b[k]; });
+}
+
+function handleConcPedidosFile(file){
+  if (!file) return;
+  showLoading('Lendo planilha de conciliação...');
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+      if (rows.length<2){ hideLoading(); return; }
+      var rawHeaders = rows[0].map(function(h){ return normText(h); });
+      var idx = {
+        idEscola: rawHeaders.findIndex(function(h){ return h.indexOf('escola')>=0; }),
+        sku: rawHeaders.findIndex(function(h){ return h.indexOf('sku')>=0 || h.indexOf('codigo')>=0 || h.indexOf('material')>=0; }),
+        quantidade: rawHeaders.findIndex(function(h){ return h.indexOf('quant')>=0; }),
+        numeroPedido: rawHeaders.findIndex(function(h){ return h.indexOf('pedido')>=0; }),
+        dataFornecedor: rawHeaders.findIndex(function(h){ return h.indexOf('data')>=0; }),
+      };
+      if (idx.idEscola<0 || idx.sku<0 || idx.numeroPedido<0){
+        hideLoading();
+        alert('Não encontrei as colunas mínimas (ID Escola, SKU, Nº do pedido). Confira se está usando o modelo padrão.');
+        return;
+      }
+      var linhas = [];
+      for (var i=1;i<rows.length;i++){
+        var r = rows[i];
+        if (!r || r.every(function(c){return c==='' || c==null;})) continue;
+        var idEscola = String(r[idx.idEscola]||'').trim();
+        var sku = String(r[idx.sku]||'').trim();
+        var numeroPedido = String(r[idx.numeroPedido]||'').trim();
+        if (!idEscola || !sku || !numeroPedido) continue;
+        linhas.push({
+          idEscola: idEscola, sku: sku,
+          quantidade: idx.quantidade>=0 ? (Number(r[idx.quantidade])||0) : 0,
+          numeroPedido: numeroPedido,
+          dataFornecedor: idx.dataFornecedor>=0 ? excelValueToDateStr(r[idx.dataFornecedor]) : '',
+        });
+      }
+      if (linhas.length===0){ hideLoading(); alert('Nenhuma linha válida encontrada na planilha.'); return; }
+      conciliarPedidosFornecedor(linhas);
+      document.getElementById('concPedidosFile').value='';
+    } catch(err){ onError(err); }
+  };
+  reader.onerror = function(){ hideLoading(); alert('Não consegui ler o arquivo.'); };
+  reader.readAsArrayBuffer(file);
+}
+
+function conciliarPedidosFornecedor(linhasSku){
+  showLoading('Buscando pedidos abertos das escolas envolvidas...');
+  var escolasEnvolvidas = Array.from(new Set(linhasSku.map(function(l){ return l.idEscola; })));
+  var promises = escolasEnvolvidas.map(function(idEscola){
+    return db.collection('conciliador_pedidos').where('idEscola','==',idEscola).get();
+  });
+  Promise.all(promises).then(function(snaps){
+    var nossos = [];
+    snaps.forEach(function(snap){ snap.docs.forEach(function(d){ nossos.push(Object.assign({id:d.id}, d.data())); }); });
+    // só linhas ainda sem número e não concluídas entram
+    nossos = nossos.filter(function(p){ return p.status!=='concluido' && !(p.numeroPedidoFornecedor||'').trim(); });
+
+    // monta "pedidos do fornecedor": agrupa as linhas de SKU por escola + número do pedido
+    var ordensForn = {};
+    linhasSku.forEach(function(l){
+      var k = normText(l.idEscola)+'|'+l.numeroPedido;
+      if (!ordensForn[k]) ordensForn[k] = { idEscola: l.idEscola, numeroPedido: l.numeroPedido, dataFornecedor: l.dataFornecedor, vetor: {} };
+      ordensForn[k].vetor[normText(l.sku)] = (ordensForn[k].vetor[normText(l.sku)]||0) + l.quantidade;
+    });
+
+    var acoes = [];
+    var pendencias = [];
+
+    // processa por escola
+    var porEscola = {};
+    Object.keys(ordensForn).forEach(function(k){
+      var o = ordensForn[k];
+      (porEscola[normText(o.idEscola)] = porEscola[normText(o.idEscola)]||[]).push(o);
+    });
+
+    Object.keys(porEscola).forEach(function(escKey){
+      var ordens = porEscola[escKey];
+      var meus = nossos.filter(function(p){ return normText(p.idEscola)===escKey; })
+        .map(function(p){ return Object.assign({}, p, { _vetor: vetorDoPedido(p) }); })
+        .filter(function(p){ return Object.keys(p._vetor).length>0; })
+        .sort(function(a,b){ return ordemDoPedido(a)-ordemDoPedido(b); });
+
+      if (meus.length===0){
+        ordens.forEach(function(o){ pendencias.push({ ordem:o, motivo:'Nenhum pedido em aberto (sem número) para essa escola, ou o De-para não cobre a coleção.' }); });
+        return;
+      }
+
+      // CASO 1 e 4: uma ordem do fornecedor = combinação (1 a 4) de linhas nossas cuja soma de SKUs bate exato
+      ordens.forEach(function(o){
+        if (o._usado) return;
+        var candidatas = meus.filter(function(m){
+          return !m._usado && dataDentroDaJanela(m.dataPedido, o.dataFornecedor) && vetorCabe(m._vetor, o.vetor);
+        });
+        var combo = encontrarComboVetores(candidatas, o.vetor);
+        if (combo){
+          o._usado = true;
+          combo.forEach(function(m){
+            m._usado = true;
+            acoes.push({ pedidoId: m.id, numeroPedido: o.numeroPedido, atual: m.numeroPedidoFornecedor||'',
+              resumo: m.idEscola+' | '+m.colecao+' v'+m.volume+' | qtd '+m.quantidade+' → nº '+o.numeroPedido + (combo.length>1?' (pedidos juntados pelo fornecedor)':'') });
+          });
+        }
+      });
+
+      // CASO 2 e 3: fornecedor QUEBROU uma linha nossa em várias ordens (físico/digital ou ruptura):
+      // uma combinação (2 a 4) de ordens soma exatamente o vetor de UMA linha nossa
+      meus.filter(function(m){ return !m._usado; }).forEach(function(m){
+        var ordensLivres = ordens.filter(function(o){ return !o._usado && dataDentroDaJanela(m.dataPedido, o.dataFornecedor) && vetorCabe(o.vetor, m._vetor); });
+        var combo = encontrarComboVetores(ordensLivres.map(function(o){ return { _vetor: o.vetor, _ref: o }; }), m._vetor);
+        if (combo && combo.length>=2){
+          m._usado = true;
+          var numeros = combo.map(function(c){ c._ref._usado = true; return c._ref.numeroPedido; });
+          acoes.push({ pedidoId: m.id, numeroPedido: numeros.join(', '), atual: m.numeroPedidoFornecedor||'',
+            resumo: m.idEscola+' | '+m.colecao+' v'+m.volume+' | qtd '+m.quantidade+' → nºs '+numeros.join(', ')+' (pedido dividido pelo fornecedor)' });
+        }
+      });
+
+      ordens.filter(function(o){ return !o._usado; }).forEach(function(o){
+        pendencias.push({ ordem:o, motivo:'Não achei combinação de SKUs/quantidades/datas que feche com os pedidos em aberto.' });
+      });
+    });
+
+    executarAcoesConciliacao(acoes, pendencias);
+  }).catch(onError);
+}
+
+// Procura um subconjunto (1 a 4 itens, cada um com ._vetor) cuja soma de vetores seja exatamente o alvo
+function encontrarComboVetores(itens, alvo){
+  var n = itens.length;
+  if (n===0) return null;
+  var melhor = null;
+  function busca(idx, atual, soma){
+    if (melhor) return;
+    if (atual.length>=1 && vetoresIguais(soma, alvo)){ melhor = atual.slice(); return; }
+    if (idx>=n || atual.length>=4) return;
+    var item = itens[idx];
+    var novaSoma = somarVetores([soma, item._vetor]);
+    if (vetorCabe(novaSoma, alvo)) busca(idx+1, atual.concat([item]), novaSoma);
+    busca(idx+1, atual, soma);
+  }
+  busca(0, [], {});
+  return melhor;
+}
+
+function dataDentroDaJanela(dataNossaStr, dataFornStr){
+  var nossa = parseBRDate(dataNossaStr);
+  var forn = parseBRDate(dataFornStr);
+  if (!nossa || !forn) return true; // sem data confiável dos dois lados, não bloqueia por data
+  var diffDias = (forn - nossa) / 86400000;
+  return diffDias >= 0 && diffDias <= TOLERANCIA_DIAS_FORNECEDOR;
+}
+
+function numerosParaArray(str){
+  return (str||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+}
+
+function executarAcoesConciliacao(acoes, pendencias){
+  if (acoes.length===0){
+    hideLoading();
+    renderResultadoConciliacao([], pendencias);
+    return;
+  }
+  showLoading('Aplicando vínculos ('+acoes.length+' ações)...');
+  var batch = db.batch();
+  acoes.forEach(function(a){
+    var novos = numerosParaArray(a.atual).concat(numerosParaArray(a.numeroPedido));
+    var unicos = novos.filter(function(v,i){ return novos.indexOf(v)===i; });
+    batch.update(db.collection('conciliador_pedidos').doc(a.pedidoId), {
+      numeroPedidoFornecedor: unicos.join(', '),
+      numerosPedidoArray: unicos,
+    });
+  });
+  batch.commit().then(function(){
+    hideLoading();
+    renderResultadoConciliacao(acoes, pendencias);
+    renderPedidos(); refreshSummary();
+  }).catch(onError);
+}
+
+function renderResultadoConciliacao(acoes, pendencias){
+  var el = document.getElementById('concPedidosResultado');
+  var html = '';
+  html += '<div class="row"><span class="pill conciliada">'+acoes.length+' vínculo(s) aplicado(s)</span>';
+  html += '<span class="pill '+(pendencias.length>0?'pendente':'conciliada')+'">'+pendencias.length+' pendência(s)</span></div>';
+  if (acoes.length>0){
+    html += '<h3 style="font-size:14px;margin:14px 0 6px">Vínculos aplicados</h3>';
+    html += acoes.map(function(a){ return '<div class="detail" style="margin-top:4px">'+a.resumo+'</div>'; }).join('');
+  }
+  if (pendencias.length>0){
+    html += '<h3 style="font-size:14px;margin:14px 0 6px">Pendências (revisar manualmente)</h3>';
+    html += pendencias.map(function(pd){
+      var o = pd.ordem;
+      var skus = Object.keys(o.vetor).map(function(s){ return s+' ('+o.vetor[s]+')'; }).join(', ');
+      return '<div class="detail" style="margin-top:4px"><strong>'+o.idEscola+' | nº '+o.numeroPedido+' | SKUs: '+skus+'</strong><br>'+pd.motivo+'</div>';
+    }).join('');
+  }
+  el.innerHTML = html;
+}
+
+// =====================================================================
 // 8) Parsing de XML da NF-e (via DOMParser do navegador)
 // =====================================================================
 function parseNFeXML(xmlText){
@@ -1241,9 +1500,13 @@ function buscarCandidatosPorEscolas(idsEscola){
 function buscarCandidatosPorNumeroPedido(numeros){
   if (!numeros || numeros.length===0) return Promise.resolve([]);
   var promises = numeros.map(function(n){
+    return db.collection('conciliador_pedidos').where('numerosPedidoArray','array-contains', n).get();
+  });
+  // fallback: também busca por igualdade exata no campo texto, para linhas salvas antes dessa versão
+  var promisesLegado = numeros.map(function(n){
     return db.collection('conciliador_pedidos').where('numeroPedidoFornecedor','==', n).get();
   });
-  return Promise.all(promises).then(function(snaps){
+  return Promise.all(promises.concat(promisesLegado)).then(function(snaps){
     var todos = []; var vistos = {};
     snaps.forEach(function(snap){
       snap.docs.forEach(function(d){
