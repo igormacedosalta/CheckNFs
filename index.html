@@ -697,7 +697,7 @@ function handlePedidosFile(file){
           dataPedido: idx.dataPedido>=0 ? excelValueToDateStr(r[idx.dataPedido]) : '',
           projeto: idx.projeto>=0 ? String(r[idx.projeto]||'').trim() : '',
           tipoFaturamento: idx.tipoFaturamento>=0 ? capitalizarPrimeira(r[idx.tipoFaturamento]) : '',
-          status:'aberto', recebido:{}, criadoEm: new Date().toISOString(), numeroNF:'', numeroPedidoFornecedor:'',
+          status:'aberto', recebido:{}, criadoEm: new Date().toISOString(), numeroNF:'', numeroPedidoFornecedor:'', saldoVinculado: 0,
         };
         objetos.push(obj);
       }
@@ -1061,15 +1061,24 @@ function traduzirTipoFaturamento(natOp, faturamentoMap){
 // =====================================================================
 // 7d) Conciliação de Pedidos (planilha padrão POR SKU com números do fornecedor)
 // =====================================================================
-var TOLERANCIA_DIAS_FORNECEDOR = 7; // data do fornecedor pode ser até X dias DEPOIS da nossa
+// Modelo: cada pedido nosso tem uma "quantidade" total e um "saldoVinculado" (quanto já
+// foi associado a número(s) de pedido do fornecedor até agora). A diferença é o saldo em
+// aberto — isso permite que a conciliação aconteça aos poucos, em uploads separados no
+// tempo, sem exigir que tudo feche de uma vez só.
+var TOLERANCIA_DIAS_FORNECEDOR = 7; // usado só como desempate entre candidatos empatados
 
-// Expande uma linha de pedido nossa em um "vetor" de SKUs esperados: { sku: quantidade }
-function vetorDoPedido(p){
+// Vetor de SKUs para 1 unidade da coleção/volume de um pedido (antes de multiplicar pela quantidade)
+function unidadeVetorPedido(p){
   var linhas = STATE.depara.filter(function(d){
     return normText(d.colecao)===normText(p.colecao) && String(d.volume).trim()===String(p.volume).trim();
   });
   var v = {};
-  linhas.forEach(function(d){ v[normText(d.sku)] = (v[normText(d.sku)]||0) + (Number(p.quantidade)||0); });
+  linhas.forEach(function(d){ v[normText(d.sku)] = (v[normText(d.sku)]||0) + 1; });
+  return v;
+}
+function escalarVetor(unidade, qtd){
+  var v = {};
+  Object.keys(unidade).forEach(function(k){ v[k] = unidade[k]*qtd; });
   return v;
 }
 function somarVetores(lista){
@@ -1086,6 +1095,21 @@ function vetoresIguais(a, b){
 // b "cabe" dentro de a? (todos os SKUs de b existem em a com quantidade suficiente)
 function vetorCabe(b, a){
   return Object.keys(b).every(function(k){ return (a[k]||0) + 0.0001 >= b[k]; });
+}
+
+// Testa se o vetor de uma ordem do fornecedor é EXATAMENTE uma fração (X unidades) da coleção
+// de um pedido — ou seja, os mesmos SKUs, nas mesmas proporções, sem sobra nem SKU estranho.
+// Devolve X (quantidade equivalente) ou null se não for uma fração pura dessa coleção.
+function quantidadeEquivalente(unidade, ordemVetor){
+  var chavesUnidade = Object.keys(unidade).filter(function(k){ return unidade[k]>0; });
+  if (chavesUnidade.length===0) return null;
+  if (!Object.keys(ordemVetor).every(function(k){ return unidade[k]!==undefined; })) return null; // SKU que não pertence a essa coleção
+  var ref = chavesUnidade[0];
+  if (!ordemVetor[ref]) return null;
+  var X = ordemVetor[ref] / unidade[ref];
+  if (X <= 0.0001) return null;
+  var bate = chavesUnidade.every(function(k){ return Math.abs((ordemVetor[k]||0) - unidade[k]*X) < 0.0001; });
+  return bate ? X : null;
 }
 
 function handleConcPedidosFile(file){
@@ -1143,10 +1167,11 @@ function conciliarPedidosFornecedor(linhasSku){
   Promise.all(promises).then(function(snaps){
     var nossos = [];
     snaps.forEach(function(snap){ snap.docs.forEach(function(d){ nossos.push(Object.assign({id:d.id}, d.data())); }); });
-    // só linhas ainda sem número e não concluídas entram
-    nossos = nossos.filter(function(p){ return p.status!=='concluido' && !(p.numeroPedidoFornecedor||'').trim(); });
+    // entram na conciliação pedidos não concluídos que AINDA tenham saldo sem vincular
+    // (mesmo que já tenham algum número parcial de uma conciliação anterior)
+    nossos = nossos.filter(function(p){ return p.status!=='concluido' && ((Number(p.quantidade)||0) - (Number(p.saldoVinculado)||0)) > 0.0001; });
 
-    // monta "pedidos do fornecedor": agrupa as linhas de SKU por escola + número do pedido
+    // monta "ordens do fornecedor": agrupa as linhas de SKU por escola + número do pedido
     var ordensForn = {};
     linhasSku.forEach(function(l){
       var k = normText(l.idEscola)+'|'+l.numeroPedido;
@@ -1154,10 +1179,16 @@ function conciliarPedidosFornecedor(linhasSku){
       ordensForn[k].vetor[normText(l.sku)] = (ordensForn[k].vetor[normText(l.sku)]||0) + l.quantidade;
     });
 
-    var acoes = [];
+    var acoesPorPedido = {}; // pedidoId -> { pedido, numerosAdicionados:[], saldoAplicado }
     var pendencias = [];
 
-    // processa por escola
+    function registrarAplicacao(pedido, numero, quantidadeAplicada){
+      if (!acoesPorPedido[pedido.id]) acoesPorPedido[pedido.id] = { pedido: pedido, numeros: [], saldoAplicado: 0, resumos: [] };
+      acoesPorPedido[pedido.id].numeros.push(numero);
+      acoesPorPedido[pedido.id].saldoAplicado += quantidadeAplicada;
+      pedido._saldoRestante -= quantidadeAplicada;
+    }
+
     var porEscola = {};
     Object.keys(ordensForn).forEach(function(k){
       var o = ordensForn[k];
@@ -1167,60 +1198,85 @@ function conciliarPedidosFornecedor(linhasSku){
     Object.keys(porEscola).forEach(function(escKey){
       var ordens = porEscola[escKey];
       var meus = nossos.filter(function(p){ return normText(p.idEscola)===escKey; })
-        .map(function(p){ return Object.assign({}, p, { _vetor: vetorDoPedido(p) }); })
-        .filter(function(p){ return Object.keys(p._vetor).length>0; })
+        .map(function(p){
+          var unidade = unidadeVetorPedido(p);
+          var saldoRestante = (Number(p.quantidade)||0) - (Number(p.saldoVinculado)||0);
+          return Object.assign({}, p, { _unidade: unidade, _saldoRestante: saldoRestante });
+        })
+        .filter(function(p){ return Object.keys(p._unidade).length>0; })
         .sort(function(a,b){ return ordemDoPedido(a)-ordemDoPedido(b); });
 
       if (meus.length===0){
-        ordens.forEach(function(o){ pendencias.push({ ordem:o, motivo:'Nenhum pedido em aberto (sem número) para essa escola, ou o De-para não cobre a coleção.' }); });
+        ordens.forEach(function(o){ pendencias.push({ ordem:o, motivo:'Nenhum pedido em aberto (com saldo pendente) para essa escola, ou o De-para não cobre a coleção.' }); });
         return;
       }
 
-      // CASO 1 e 4: uma ordem do fornecedor = combinação (1 a 4) de linhas nossas cuja soma de SKUs bate exato
+      function vetorSaldo(p){ return escalarVetor(p._unidade, p._saldoRestante); }
+
+      // PASSO 1 — match exato: uma ordem do fornecedor = combinação (1 a 4) de saldos nossos que somam igual
       ordens.forEach(function(o){
         if (o._usado) return;
-        var candidatas = meus.filter(function(m){
-          return !m._usado && dataDentroDaJanela(m.dataPedido, o.dataFornecedor) && vetorCabe(m._vetor, o.vetor);
-        });
+        var candidatas = meus.filter(function(m){ return m._saldoRestante>0.0001 && vetorCabe(vetorSaldo(m), o.vetor); })
+          .map(function(m){ return { ref:m, _vetor: vetorSaldo(m) }; })
+          .sort(function(a,b){
+            var pa = dataDentroDaJanela(a.ref.dataPedido, o.dataFornecedor) ? 0 : 1;
+            var pb = dataDentroDaJanela(b.ref.dataPedido, o.dataFornecedor) ? 0 : 1;
+            if (pa!==pb) return pa-pb;
+            return ordemDoPedido(a.ref)-ordemDoPedido(b.ref);
+          });
         var combo = encontrarComboVetores(candidatas, o.vetor);
         if (combo){
           o._usado = true;
-          combo.forEach(function(m){
-            m._usado = true;
-            acoes.push({ pedidoId: m.id, numeroPedido: o.numeroPedido, atual: m.numeroPedidoFornecedor||'',
-              resumo: m.idEscola+' | '+m.colecao+' v'+m.volume+' | qtd '+m.quantidade+' → nº '+o.numeroPedido + (combo.length>1?' (pedidos juntados pelo fornecedor)':'') });
+          combo.forEach(function(c){
+            registrarAplicacao(c.ref, o.numeroPedido, c.ref._saldoRestante); // combo exato consome o saldo inteiro de cada um
+            var extra = combo.length>1 ? ' (pedidos juntados pelo fornecedor)' : '';
+            acoesPorPedido[c.ref.id].resumos.push(c.ref.idEscola+' | '+c.ref.colecao+' v'+c.ref.volume+' | qtd aplicada '+acoesPorPedido[c.ref.id].saldoAplicado+' → nº '+o.numeroPedido+extra);
           });
         }
       });
 
-      // CASO 2 e 3: fornecedor QUEBROU uma linha nossa em várias ordens (físico/digital ou ruptura):
-      // uma combinação (2 a 4) de ordens soma exatamente o vetor de UMA linha nossa
-      meus.filter(function(m){ return !m._usado; }).forEach(function(m){
-        var ordensLivres = ordens.filter(function(o){ return !o._usado && dataDentroDaJanela(m.dataPedido, o.dataFornecedor) && vetorCabe(o.vetor, m._vetor); });
-        var combo = encontrarComboVetores(ordensLivres.map(function(o){ return { _vetor: o.vetor, _ref: o }; }), m._vetor);
+      // PASSO 2 — quebra: uma linha nossa (com saldo) é fechada por uma combinação (2 a 4) de ordens do fornecedor
+      meus.filter(function(m){ return m._saldoRestante>0.0001; }).forEach(function(m){
+        var ordensLivres = ordens.filter(function(o){ return !o._usado && vetorCabe(o.vetor, vetorSaldo(m)); });
+        var combo = encontrarComboVetores(ordensLivres.map(function(o){ return { _vetor: o.vetor, _ref:o }; }), vetorSaldo(m));
         if (combo && combo.length>=2){
-          m._usado = true;
-          var numeros = combo.map(function(c){ c._ref._usado = true; return c._ref.numeroPedido; });
-          acoes.push({ pedidoId: m.id, numeroPedido: numeros.join(', '), atual: m.numeroPedidoFornecedor||'',
-            resumo: m.idEscola+' | '+m.colecao+' v'+m.volume+' | qtd '+m.quantidade+' → nºs '+numeros.join(', ')+' (pedido dividido pelo fornecedor)' });
+          combo.forEach(function(c){ c._ref._usado = true; });
+          var somaAplicada = m._saldoRestante;
+          combo.forEach(function(c){ registrarAplicacao(m, c._ref.numeroPedido, 0); }); // zera incremento aqui, aplica tudo de uma vez abaixo
+          acoesPorPedido[m.id].saldoAplicado = somaAplicada; m._saldoRestante = 0;
+          var numeros = combo.map(function(c){ return c._ref.numeroPedido; });
+          acoesPorPedido[m.id].resumos.push(m.idEscola+' | '+m.colecao+' v'+m.volume+' | qtd aplicada '+somaAplicada+' → nºs '+numeros.join(', ')+' (pedido dividido pelo fornecedor)');
+        }
+      });
+
+      // PASSO 3 — vínculo parcial: ordem que corresponde a uma FRAÇÃO do saldo de um único pedido
+      // (cobre o caso de o fornecedor mandar aos poucos, em uploads separados no tempo)
+      ordens.filter(function(o){ return !o._usado; }).forEach(function(o){
+        var candidato = meus.filter(function(m){ return m._saldoRestante>0.0001; })
+          .map(function(m){ return { ref:m, X: quantidadeEquivalente(m._unidade, o.vetor) }; })
+          .filter(function(c){ return c.X!==null && c.X <= c.ref._saldoRestante + 0.0001; })
+          .sort(function(a,b){ return ordemDoPedido(a.ref)-ordemDoPedido(b.ref); })[0];
+        if (candidato){
+          o._usado = true;
+          registrarAplicacao(candidato.ref, o.numeroPedido, candidato.X);
+          var completo = candidato.ref._saldoRestante<=0.0001;
+          acoesPorPedido[candidato.ref.id].resumos.push(candidato.ref.idEscola+' | '+candidato.ref.colecao+' v'+candidato.ref.volume+' | qtd aplicada '+candidato.X+' → nº '+o.numeroPedido+(completo?' (fecha o pedido)':' (parcial — ainda restam '+candidato.ref._saldoRestante+' sem vincular)'));
         }
       });
 
       ordens.filter(function(o){ return !o._usado; }).forEach(function(o){
         var diagnostico = meus.map(function(m){
-          var dentroDaJanela = dataDentroDaJanela(m.dataPedido, o.dataFornecedor);
-          var cabe = vetorCabe(m._vetor, o.vetor);
-          var motivo = m._usado ? 'já vinculado a outro número nesta conciliação'
-            : !dentroDaJanela ? 'data do pedido ('+m.dataPedido+') fora da janela para a data do fornecedor ('+o.dataFornecedor+')'
-            : !cabe ? 'quantidade/SKU não bate com esse pedido'
-            : 'passou nos filtros, mas não fechou em nenhuma combinação exata';
-          return { idEscola:m.idEscola, colecao:m.colecao, volume:m.volume, quantidade:m.quantidade, dataPedido:m.dataPedido, motivo:motivo };
+          var cabe = vetorCabe(vetorSaldo(m), o.vetor) || quantidadeEquivalente(m._unidade, o.vetor)!==null;
+          var motivo = m._saldoRestante<=0.0001 ? 'já com saldo totalmente vinculado'
+            : !cabe ? 'quantidade/SKU não bate com o saldo em aberto desse pedido'
+            : 'passou nos filtros, mas não fechou em nenhuma combinação';
+          return { idEscola:m.idEscola, colecao:m.colecao, volume:m.volume, quantidade:m.quantidade, saldoRestante:m._saldoRestante, dataPedido:m.dataPedido, motivo:motivo };
         });
-        pendencias.push({ ordem:o, motivo:'Não achei combinação de SKUs/quantidades/datas que feche com os pedidos em aberto.', diagnostico: diagnostico });
+        pendencias.push({ ordem:o, motivo:'Não achei combinação de SKUs/quantidades que feche com os pedidos em aberto.', diagnostico: diagnostico });
       });
     });
 
-    executarAcoesConciliacao(acoes, pendencias);
+    executarAcoesConciliacao(acoesPorPedido, pendencias);
   }).catch(onError);
 }
 
@@ -1245,7 +1301,7 @@ function encontrarComboVetores(itens, alvo){
 function dataDentroDaJanela(dataNossaStr, dataFornStr){
   var nossa = parseBRDate(dataNossaStr);
   var forn = parseBRDate(dataFornStr);
-  if (!nossa || !forn) return true; // sem data confiável dos dois lados, não bloqueia por data
+  if (!nossa || !forn) return true;
   var diffDias = (forn - nossa) / 86400000;
   return diffDias >= 0 && diffDias <= TOLERANCIA_DIAS_FORNECEDOR;
 }
@@ -1254,37 +1310,44 @@ function numerosParaArray(str){
   return (str||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
 }
 
-function executarAcoesConciliacao(acoes, pendencias){
-  if (acoes.length===0){
+function executarAcoesConciliacao(acoesPorPedido, pendencias){
+  var pedidoIds = Object.keys(acoesPorPedido);
+  var resumosParaExibir = [];
+  pedidoIds.forEach(function(id){ resumosParaExibir = resumosParaExibir.concat(acoesPorPedido[id].resumos); });
+
+  if (pedidoIds.length===0){
     hideLoading();
     renderResultadoConciliacao([], pendencias);
     return;
   }
-  showLoading('Aplicando vínculos ('+acoes.length+' ações)...');
+  showLoading('Aplicando vínculos ('+pedidoIds.length+' pedido(s))...');
   var batch = db.batch();
-  acoes.forEach(function(a){
-    var novos = numerosParaArray(a.atual).concat(numerosParaArray(a.numeroPedido));
-    var unicos = novos.filter(function(v,i){ return novos.indexOf(v)===i; });
-    batch.update(db.collection('conciliador_pedidos').doc(a.pedidoId), {
-      numeroPedidoFornecedor: unicos.join(', '),
-      numerosPedidoArray: unicos,
+  pedidoIds.forEach(function(id){
+    var a = acoesPorPedido[id];
+    var atuais = numerosParaArray(a.pedido.numeroPedidoFornecedor);
+    var novos = atuais.concat(a.numeros).filter(function(v,i,arr){ return arr.indexOf(v)===i; });
+    var novoSaldo = (Number(a.pedido.saldoVinculado)||0) + a.saldoAplicado;
+    batch.update(db.collection('conciliador_pedidos').doc(id), {
+      numeroPedidoFornecedor: novos.join(', '),
+      numerosPedidoArray: novos,
+      saldoVinculado: novoSaldo,
     });
   });
   batch.commit().then(function(){
     hideLoading();
-    renderResultadoConciliacao(acoes, pendencias);
+    renderResultadoConciliacao(resumosParaExibir, pendencias);
     renderPedidos(); refreshSummary();
   }).catch(onError);
 }
 
-function renderResultadoConciliacao(acoes, pendencias){
+function renderResultadoConciliacao(resumos, pendencias){
   var el = document.getElementById('concPedidosResultado');
   var html = '';
-  html += '<div class="row"><span class="pill conciliada">'+acoes.length+' vínculo(s) aplicado(s)</span>';
+  html += '<div class="row"><span class="pill conciliada">'+resumos.length+' vínculo(s) aplicado(s)</span>';
   html += '<span class="pill '+(pendencias.length>0?'pendente':'conciliada')+'">'+pendencias.length+' pendência(s)</span></div>';
-  if (acoes.length>0){
+  if (resumos.length>0){
     html += '<h3 style="font-size:14px;margin:14px 0 6px">Vínculos aplicados</h3>';
-    html += acoes.map(function(a){ return '<div class="detail" style="margin-top:4px">'+a.resumo+'</div>'; }).join('');
+    html += resumos.map(function(r){ return '<div class="detail" style="margin-top:4px">'+r+'</div>'; }).join('');
   }
   if (pendencias.length>0){
     html += '<h3 style="font-size:14px;margin:14px 0 6px">Pendências (revisar manualmente)</h3>';
@@ -1295,7 +1358,7 @@ function renderResultadoConciliacao(acoes, pendencias){
       if (pd.diagnostico && pd.diagnostico.length>0){
         diagHtml = '<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:var(--text-muted)">Ver pedidos considerados e por que não bateram</summary>'+
           '<div style="margin-top:6px">'+pd.diagnostico.map(function(d){
-            return '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--row-border)">'+d.colecao+' v'+d.volume+' | qtd '+d.quantidade+' | data '+d.dataPedido+' — <em>'+d.motivo+'</em></div>';
+            return '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--row-border)">'+d.colecao+' v'+d.volume+' | qtd total '+d.quantidade+' | saldo em aberto '+d.saldoRestante+' | data '+d.dataPedido+' — <em>'+d.motivo+'</em></div>';
           }).join('')+'</div></details>';
       }
       return '<div class="detail" style="margin-top:4px"><strong>'+o.idEscola+' | nº '+o.numeroPedido+' | data forn. '+(o.dataFornecedor||'—')+' | SKUs: '+skus+'</strong><br>'+pd.motivo+diagHtml+'</div>';
