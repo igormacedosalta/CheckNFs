@@ -150,7 +150,10 @@
       <input type="file" id="pedidosFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handlePedidosFile(this.files[0])">
       <div class="hint">Colunas reconhecidas: ID Escola, Coleção, Volume, Quantidade, Data do pedido, Projeto?, Tipo de faturamento. Essa base sempre <strong>acumula</strong>.</div>
       <div id="pedidosImportWarn"></div>
-      <div class="row" style="margin-top:12px"><button class="btn danger" onclick="clearPedidos()">Zerar base de pedidos</button></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn danger" onclick="clearPedidos()">Zerar base de pedidos</button>
+        <button class="btn secondary" onclick="exportarPedidosCSV()">Exportar pedidos em CSV</button>
+      </div>
     </div>
     <div class="card">
       <div class="row" style="margin-bottom:0">
@@ -754,6 +757,40 @@ function removePedido(id){
     });
   }).then(function(){
     hideLoading(); renderPedidos(); refreshSummary();
+  }).catch(onError);
+}
+
+function csvEscape(v){
+  var s = (v===undefined || v===null) ? '' : String(v);
+  if (/[",;\n]/.test(s)) s = '"' + s.replace(/"/g,'""') + '"';
+  return s;
+}
+
+function exportarPedidosCSV(){
+  showLoading('Buscando toda a base de pedidos para exportar (pode demorar com muitos pedidos)...');
+  db.collection('conciliador_pedidos').get().then(function(snap){
+    var pedidos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+    var cabecalho = ['ID Escola','Coleção','Volume','Quantidade','Data do pedido','Projeto?','Tipo de faturamento','Nº do pedido','NF','Status','Data de upload'];
+    var linhas = [cabecalho.join(';')];
+    pedidos.forEach(function(p){
+      var statusLabel = p.status==='aberto'?'Aberto':p.status==='parcial'?'Parcial':'Concluído';
+      linhas.push([
+        csvEscape(p.idEscola), csvEscape(p.colecao), csvEscape(p.volume), csvEscape(p.quantidade),
+        csvEscape(p.dataPedido), csvEscape(p.projeto), csvEscape(capitalizarPrimeira(p.tipoFaturamento)),
+        csvEscape(p.numeroPedidoFornecedor), csvEscape(p.numeroNF), csvEscape(statusLabel), csvEscape(fmtDate(p.criadoEm)),
+      ].join(';'));
+    });
+    var csv = '\uFEFF' + linhas.join('\r\n'); // BOM para o Excel abrir acentos corretamente
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'pedidos_' + new Date().toISOString().slice(0,10) + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    hideLoading();
   }).catch(onError);
 }
 
