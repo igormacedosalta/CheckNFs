@@ -247,6 +247,7 @@
       <input type="file" id="concPedidosFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleConcPedidosFile(this.files[0])">
       <div class="hint">Colunas do modelo padrão (por SKU): ID Escola, SKU, Quantidade, Nº do pedido, Data do fornecedor. A ferramenta expande seus pedidos em SKUs (via De-para) e vincula os números automaticamente — inclusive quando o fornecedor agrega SKUs compartilhados entre coleções, divide um pedido em vários números (físico/digital ou ruptura) ou junta pedidos de dias próximos num número só.</div>
       <div id="concPedidosWarn"></div>
+      <div class="row" style="margin-top:12px"><button class="btn secondary" onclick="limparResultadoConciliacao()">Limpar resultado</button></div>
     </div>
     <div class="card"><div id="concPedidosResultado"><div class="empty">Nenhuma conciliação processada ainda nesta sessão.</div></div></div>
   </div>
@@ -1206,7 +1207,16 @@ function conciliarPedidosFornecedor(linhasSku){
       });
 
       ordens.filter(function(o){ return !o._usado; }).forEach(function(o){
-        pendencias.push({ ordem:o, motivo:'Não achei combinação de SKUs/quantidades/datas que feche com os pedidos em aberto.' });
+        var diagnostico = meus.map(function(m){
+          var dentroDaJanela = dataDentroDaJanela(m.dataPedido, o.dataFornecedor);
+          var cabe = vetorCabe(m._vetor, o.vetor);
+          var motivo = m._usado ? 'já vinculado a outro número nesta conciliação'
+            : !dentroDaJanela ? 'data do pedido ('+m.dataPedido+') fora da janela para a data do fornecedor ('+o.dataFornecedor+')'
+            : !cabe ? 'quantidade/SKU não bate com esse pedido'
+            : 'passou nos filtros, mas não fechou em nenhuma combinação exata';
+          return { idEscola:m.idEscola, colecao:m.colecao, volume:m.volume, quantidade:m.quantidade, dataPedido:m.dataPedido, motivo:motivo };
+        });
+        pendencias.push({ ordem:o, motivo:'Não achei combinação de SKUs/quantidades/datas que feche com os pedidos em aberto.', diagnostico: diagnostico });
       });
     });
 
@@ -1281,10 +1291,22 @@ function renderResultadoConciliacao(acoes, pendencias){
     html += pendencias.map(function(pd){
       var o = pd.ordem;
       var skus = Object.keys(o.vetor).map(function(s){ return s+' ('+o.vetor[s]+')'; }).join(', ');
-      return '<div class="detail" style="margin-top:4px"><strong>'+o.idEscola+' | nº '+o.numeroPedido+' | SKUs: '+skus+'</strong><br>'+pd.motivo+'</div>';
+      var diagHtml = '';
+      if (pd.diagnostico && pd.diagnostico.length>0){
+        diagHtml = '<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:var(--text-muted)">Ver pedidos considerados e por que não bateram</summary>'+
+          '<div style="margin-top:6px">'+pd.diagnostico.map(function(d){
+            return '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--row-border)">'+d.colecao+' v'+d.volume+' | qtd '+d.quantidade+' | data '+d.dataPedido+' — <em>'+d.motivo+'</em></div>';
+          }).join('')+'</div></details>';
+      }
+      return '<div class="detail" style="margin-top:4px"><strong>'+o.idEscola+' | nº '+o.numeroPedido+' | data forn. '+(o.dataFornecedor||'—')+' | SKUs: '+skus+'</strong><br>'+pd.motivo+diagHtml+'</div>';
     }).join('');
   }
   el.innerHTML = html;
+}
+
+function limparResultadoConciliacao(){
+  document.getElementById('concPedidosResultado').innerHTML = '<div class="empty">Nenhuma conciliação processada ainda nesta sessão.</div>';
+  document.getElementById('concPedidosWarn').innerHTML = '';
 }
 
 // =====================================================================
