@@ -1102,7 +1102,6 @@ function traduzirTipoFaturamento(natOp, faturamentoMap){
 // foi associado a número(s) de pedido do fornecedor até agora). A diferença é o saldo em
 // aberto — isso permite que a conciliação aconteça aos poucos, em uploads separados no
 // tempo, sem exigir que tudo feche de uma vez só.
-var TOLERANCIA_DIAS_FORNECEDOR = 7; // usado só como desempate entre candidatos empatados
 
 // Vetor de SKUs para 1 unidade da coleção/volume de um pedido (antes de multiplicar pela quantidade)
 function unidadeVetorPedido(p){
@@ -1253,14 +1252,11 @@ function conciliarPedidosFornecedor(linhasSku){
       // PASSO 1 — match exato: uma ordem do fornecedor = combinação (1 a 4) de saldos nossos que somam igual
       ordens.forEach(function(o){
         if (o._usado) return;
-        var candidatas = meus.filter(function(m){ return m._saldoRestante>0.0001 && vetorCabe(vetorSaldo(m), o.vetor); })
+        var candidatas = meus.filter(function(m){
+            return m._saldoRestante>0.0001 && pedidoPodeSerAnterior(m.dataPedido, o.dataFornecedor) && vetorCabe(vetorSaldo(m), o.vetor);
+          })
           .map(function(m){ return { ref:m, _vetor: vetorSaldo(m) }; })
-          .sort(function(a,b){
-            var pa = dataDentroDaJanela(a.ref.dataPedido, o.dataFornecedor) ? 0 : 1;
-            var pb = dataDentroDaJanela(b.ref.dataPedido, o.dataFornecedor) ? 0 : 1;
-            if (pa!==pb) return pa-pb;
-            return ordemDoPedido(a.ref)-ordemDoPedido(b.ref);
-          });
+          .sort(function(a,b){ return ordemDoPedido(a.ref)-ordemDoPedido(b.ref); });
         var combo = encontrarComboVetores(candidatas, o.vetor);
         if (combo){
           o._usado = true;
@@ -1274,7 +1270,8 @@ function conciliarPedidosFornecedor(linhasSku){
 
       // PASSO 2 — quebra: uma linha nossa (com saldo) é fechada por uma combinação (2 a 4) de ordens do fornecedor
       meus.filter(function(m){ return m._saldoRestante>0.0001; }).forEach(function(m){
-        var ordensLivres = ordens.filter(function(o){ return !o._usado && vetorCabe(o.vetor, vetorSaldo(m)); });
+        var ordensLivres = ordens.filter(function(o){ return !o._usado && pedidoPodeSerAnterior(m.dataPedido, o.dataFornecedor) && vetorCabe(o.vetor, vetorSaldo(m)); })
+          .sort(function(a,b){ return parseBRDate(a.dataFornecedor||'')-parseBRDate(b.dataFornecedor||''); });
         var combo = encontrarComboVetores(ordensLivres.map(function(o){ return { _vetor: o.vetor, _ref:o }; }), vetorSaldo(m));
         if (combo && combo.length>=2){
           combo.forEach(function(c){ c._ref._usado = true; });
@@ -1289,7 +1286,7 @@ function conciliarPedidosFornecedor(linhasSku){
       // PASSO 3 — vínculo parcial: ordem que corresponde a uma FRAÇÃO do saldo de um único pedido
       // (cobre o caso de o fornecedor mandar aos poucos, em uploads separados no tempo)
       ordens.filter(function(o){ return !o._usado; }).forEach(function(o){
-        var candidato = meus.filter(function(m){ return m._saldoRestante>0.0001; })
+        var candidato = meus.filter(function(m){ return m._saldoRestante>0.0001 && pedidoPodeSerAnterior(m.dataPedido, o.dataFornecedor); })
           .map(function(m){ return { ref:m, X: quantidadeEquivalente(m._unidade, o.vetor) }; })
           .filter(function(c){ return c.X!==null && c.X <= c.ref._saldoRestante + 0.0001; })
           .sort(function(a,b){ return ordemDoPedido(a.ref)-ordemDoPedido(b.ref); })[0];
@@ -1303,8 +1300,10 @@ function conciliarPedidosFornecedor(linhasSku){
 
       ordens.filter(function(o){ return !o._usado; }).forEach(function(o){
         var diagnostico = meus.map(function(m){
+          var podeSerAnterior = pedidoPodeSerAnterior(m.dataPedido, o.dataFornecedor);
           var cabe = vetorCabe(vetorSaldo(m), o.vetor) || quantidadeEquivalente(m._unidade, o.vetor)!==null;
           var motivo = m._saldoRestante<=0.0001 ? 'já com saldo totalmente vinculado'
+            : !podeSerAnterior ? 'pedido feito em '+m.dataPedido+', depois da resposta do fornecedor ('+o.dataFornecedor+') — não pode ser esse'
             : !cabe ? 'quantidade/SKU não bate com o saldo em aberto desse pedido'
             : 'passou nos filtros, mas não fechou em nenhuma combinação';
           return { idEscola:m.idEscola, colecao:m.colecao, volume:m.volume, quantidade:m.quantidade, saldoRestante:m._saldoRestante, dataPedido:m.dataPedido, motivo:motivo };
@@ -1335,13 +1334,15 @@ function encontrarComboVetores(itens, alvo){
   return melhor;
 }
 
-function dataDentroDaJanela(dataNossaStr, dataFornStr){
-  var nossa = parseBRDate(dataNossaStr);
-  var forn = parseBRDate(dataFornStr);
+// Um pedido não pode ter sido "atendido" numa data anterior a quando ele foi feito —
+// isso é uma impossibilidade lógica (o fornecedor não confirma algo que ainda nem existia).
+// Sem data confiável de algum dos lados, não bloqueia (deixa a decisão pra outros critérios).
+function pedidoPodeSerAnterior(dataNossaStr, dataFornStr){
+  var nossa = parseBRDate(dataNossaStr), forn = parseBRDate(dataFornStr);
   if (!nossa || !forn) return true;
-  var diffDias = (forn - nossa) / 86400000;
-  return diffDias >= 0 && diffDias <= TOLERANCIA_DIAS_FORNECEDOR;
+  return forn.getTime() >= nossa.getTime();
 }
+
 
 function numerosParaArray(str){
   return (str||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
