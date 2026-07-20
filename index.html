@@ -1546,7 +1546,34 @@ function processNext(files, i){
       var nf = parseNFeXML(e.target.result);
       var numeros = nf.numerosPedido || [];
 
+      // Confere se o CNPJ da NF bate com o CNPJ cadastrado da escola do(s) pedido(s) encontrado(s).
+      // Isso vale mesmo quando o vínculo veio pelo Nº do pedido — o fornecedor pode emitir a NF
+      // contra o CNPJ errado mesmo com o pedido certo identificado.
+      function conferirCnpjEscolas(candidates){
+        var idsEscola = Array.from(new Set(candidates.map(function(p){ return p.idEscola; })));
+        var divergencias = [];
+        idsEscola.forEach(function(idEscola){
+          var escolaRow = STATE.escolas.filter(function(e){ return normText(e.idEscola)===normText(idEscola); })[0];
+          if (!escolaRow) return; // escola não cadastrada em Escolas — não dá pra conferir, não bloqueia
+          if (onlyDigits(escolaRow.cnpj) !== onlyDigits(nf.cnpjDest)){
+            divergencias.push(idEscola+' (CNPJ cadastrado: '+escolaRow.cnpj+')');
+          }
+        });
+        return divergencias;
+      }
+
       function finalizarComCandidatos(candidates){
+        var divergenciasCnpj = conferirCnpjEscolas(candidates);
+        if (divergenciasCnpj.length>0){
+          Object.assign(record, {
+            chave: nf.chave, numeroNF: nf.numeroNF, cnpjDest: nf.cnpjDest, nomeDest: nf.nomeDest,
+            cnpjEmit: nf.cnpjEmit, nomeEmit: nf.nomeEmit, natOp: nf.natOp, vNF: nf.vNF, infCpl: nf.infCpl,
+            itens: nf.itens, status: 'erro',
+            motivo: 'O pedido foi encontrado, mas o CNPJ da NF ('+nf.cnpjDest+') não bate com o CNPJ cadastrado da escola: '+divergenciasCnpj.join('; ')+'. O fornecedor pode ter emitido a NF contra o CNPJ errado — confira antes de aceitar.',
+            pedidosAfetados: {}, custoEsperado: 0, detalheCusto: [],
+          });
+          return db.collection('conciliador_nfs').add(record);
+        }
         var result = matchNF(nf, candidates, STATE.depara, STATE.custos, STATE.faturamento);
         Object.assign(record, {
           chave: nf.chave, numeroNF: nf.numeroNF, cnpjDest: nf.cnpjDest, nomeDest: nf.nomeDest,
@@ -1696,6 +1723,14 @@ function vincularManual(nfId, pedidoId){
   var nfRow = STATE.nfs.filter(function(n){ return String(n.id)===String(nfId); })[0];
   var pedido = (vincCandidatosCache[nfId]||[]).filter(function(p){ return String(p.id)===String(pedidoId); })[0];
   if (!nfRow || !pedido){ hideLoading(); return; }
+  var escolaRow = STATE.escolas.filter(function(e){ return normText(e.idEscola)===normText(pedido.idEscola); })[0];
+  if (escolaRow && onlyDigits(escolaRow.cnpj) !== onlyDigits(nfRow.cnpjDest)){
+    db.collection('conciliador_nfs').doc(nfId).update({
+      status: 'erro',
+      motivo: 'O CNPJ da NF ('+nfRow.cnpjDest+') não bate com o CNPJ cadastrado para '+pedido.idEscola+' ('+escolaRow.cnpj+'). O fornecedor pode ter emitido a NF contra o CNPJ errado — confira antes de aceitar.',
+    }).then(function(){ hideLoading(); renderPedidos(); refreshSummary(); }).catch(onError);
+    return;
+  }
   var nf = { natOp: nfRow.natOp, vNF: nfRow.vNF, itens: nfRow.itens, numeroNF: nfRow.numeroNF };
   var result = matchNF(nf, [pedido], STATE.depara, STATE.custos, STATE.faturamento);
   var afterMatch = result.status==='conciliada' ? applyAllocationsToPedidos(result.pedidosAfetados, [pedido], STATE.depara, STATE.custos, nf.numeroNF) : Promise.resolve();
