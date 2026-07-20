@@ -1,0 +1,1712 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conciliador de pedidos x NF</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<style>
+  :root{
+    --bg:#f7f6f2; --surface:#ffffff; --border:#e2e0d8; --text:#1c1c1a; --text-muted:#6b6a63; --hint:#8a887f;
+    --primary:#185fa5; --primary-hover:#0c447c; --primary-text:#ffffff;
+    --secondary-bg:#f1efe8; --secondary-hover:#e2e0d8;
+    --danger-bg:#fceceb; --danger-text:#a32d2d;
+    --input-border:#d3d1c7; --input-bg:#ffffff;
+    --pill-blue-bg:#e6f1fb; --pill-blue-text:#0c447c;
+    --pill-amber-bg:#faeeda; --pill-amber-text:#854f0b;
+    --pill-green-bg:#eaf3de; --pill-green-text:#3b6d11;
+    --pill-red-bg:#fceceb; --pill-red-text:#a32d2d;
+    --detail-bg:#f8f7f2; --detail-text:#4a4942;
+    --row-border:#f1efe8;
+    --shadow:0 8px 24px rgba(0,0,0,.12);
+    --overlay:rgba(28,28,26,.45);
+  }
+  [data-theme="dark"]{
+    --bg:#141412; --surface:#212120; --border:#3a3934; --text:#ece9e1; --text-muted:#b3b0a6; --hint:#93907f;
+    --primary:#4f9ae0; --primary-hover:#6fb0ea; --primary-text:#0b1e2f;
+    --secondary-bg:#2a2a27; --secondary-hover:#38372f;
+    --danger-bg:#3a2321; --danger-text:#f4a9a3;
+    --input-border:#45443a; --input-bg:#1b1b19;
+    --pill-blue-bg:#1c3350; --pill-blue-text:#8fc3f4;
+    --pill-amber-bg:#3d2f14; --pill-amber-text:#f2c477;
+    --pill-green-bg:#20351a; --pill-green-text:#9edb80;
+    --pill-red-bg:#3a2321; --pill-red-text:#f4a9a3;
+    --detail-bg:#1c1c1a; --detail-text:#cac7ba;
+    --row-border:#2a2a27;
+    --shadow:0 8px 24px rgba(0,0,0,.4);
+    --overlay:rgba(0,0,0,.6);
+  }
+  *{box-sizing:border-box;}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--text);background:var(--bg);margin:0;padding:24px;transition:background .15s,color .15s;}
+  .wrap{max-width:1200px;margin:0 auto;}
+  h1{font-size:20px;font-weight:600;margin:0;}
+  .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;}
+  .userbox{font-size:13px;color:var(--text-muted);display:flex;align-items:center;gap:10px;}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:20px;flex-wrap:wrap;}
+  .tab{padding:10px 16px;font-size:14px;font-weight:500;color:var(--text-muted);background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
+  .tab.active{color:var(--text);border-bottom-color:var(--primary);}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:16px;overflow-x:auto;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;}
+  .field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-muted);}
+  .field input,.field select{padding:7px 9px;border:1px solid var(--input-border);border-radius:6px;font-size:13px;min-width:120px;color:var(--text);background:var(--input-bg);}
+  .btn{padding:8px 14px;border-radius:6px;border:none;background:var(--primary);color:var(--primary-text);font-size:13px;font-weight:500;cursor:pointer;}
+  .btn:hover{background:var(--primary-hover);}
+  .btn.secondary{background:var(--secondary-bg);color:var(--text);}
+  .btn.secondary:hover{background:var(--secondary-hover);}
+  .btn.danger{background:var(--danger-bg);color:var(--danger-text);padding:4px 8px;font-size:12px;}
+  .btn.icon{background:var(--secondary-bg);color:var(--text);padding:8px 10px;font-size:15px;line-height:1;}
+  .btn.icon:hover{background:var(--secondary-hover);}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:left;font-weight:500;color:var(--text-muted);padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;}
+  td{padding:8px 10px;border-bottom:1px solid var(--row-border);vertical-align:top;white-space:nowrap;color:var(--text);}
+  .pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:500;white-space:nowrap;}
+  .pill.aberto{background:var(--pill-blue-bg);color:var(--pill-blue-text);}
+  .pill.parcial,.pill.pendente{background:var(--pill-amber-bg);color:var(--pill-amber-text);}
+  .pill.concluido,.pill.conciliada{background:var(--pill-green-bg);color:var(--pill-green-text);}
+  .pill.erro{background:var(--pill-red-bg);color:var(--pill-red-text);}
+  .empty{padding:30px;text-align:center;color:var(--hint);font-size:13px;}
+  textarea{width:100%;min-height:90px;font-family:monospace;font-size:12px;padding:8px;border:1px solid var(--input-border);border-radius:6px;background:var(--input-bg);color:var(--text);}
+  .summary{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;min-width:110px;}
+  .stat .n{font-size:20px;font-weight:600;color:var(--text);}
+  .stat .l{font-size:12px;color:var(--text-muted);}
+  .detail{background:var(--detail-bg);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px;color:var(--detail-text);}
+  .hint{font-size:12px;color:var(--hint);margin-top:6px;}
+  .filebox{border:1.5px dashed var(--input-border);border-radius:10px;padding:26px;text-align:center;cursor:pointer;color:var(--text-muted);font-size:13px;}
+  .filebox:hover{border-color:var(--primary);color:var(--primary);}
+  .nfitem{border-bottom:1px solid var(--row-border);padding:10px 0;}
+  .warn{background:var(--pill-amber-bg);color:var(--pill-amber-text);border-radius:8px;padding:10px 12px;font-size:12px;margin-top:10px;}
+  #loadingOverlay{display:none;position:fixed;inset:0;background:var(--overlay);align-items:center;justify-content:center;z-index:9999;}
+  #loadingOverlay .box{background:var(--surface);padding:22px 30px;border-radius:10px;font-size:14px;color:var(--text);display:flex;align-items:center;gap:12px;box-shadow:var(--shadow);}
+  .spinner{width:18px;height:18px;border:2.5px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  #loginScreen{max-width:360px;margin:80px auto;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;}
+  #loginScreen h2{font-size:17px;margin:0 0 16px;color:var(--text);}
+  #loginScreen input{width:100%;padding:9px 10px;border:1px solid var(--input-border);border-radius:6px;font-size:13px;margin-bottom:10px;background:var(--input-bg);color:var(--text);}
+  #loginError{color:var(--danger-text);font-size:12px;margin-bottom:10px;min-height:16px;}
+  .modalOverlay{display:none;position:fixed;inset:0;background:var(--overlay);align-items:center;justify-content:center;z-index:9998;}
+  .modalBox{background:var(--surface);border-radius:12px;padding:24px;max-width:640px;width:92%;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow);}
+  .modalBox h3{margin:0 0 16px;font-size:16px;color:var(--text);}
+  .modalGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .modalGrid .field{grid-column:span 1;}
+  .modalActions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
+</style>
+</head>
+<body>
+
+<div id="loadingOverlay"><div class="box"><div class="spinner"></div><span id="loadingText">Carregando...</span><button class="btn secondary" id="cancelUploadBtn" style="display:none" onclick="requestCancelUpload()">Cancelar</button></div></div>
+
+<div id="loginScreen">
+  <h2>Conciliador de pedidos x NF</h2>
+  <div id="loginError"></div>
+  <input type="email" id="loginEmail" placeholder="E-mail">
+  <input type="password" id="loginPassword" placeholder="Senha">
+  <button class="btn" style="width:100%" onclick="doLogin()">Entrar</button>
+</div>
+
+<div class="modalOverlay" id="editPedidoModal">
+  <div class="modalBox">
+    <h3>Editar pedido</h3>
+    <div class="modalGrid">
+      <div class="field"><label>ID Escola</label><input id="edit_idEscola"></div>
+      <div class="field"><label>Coleção</label><input id="edit_colecao"></div>
+      <div class="field"><label>Volume</label><input id="edit_volume"></div>
+      <div class="field"><label>Quantidade</label><input id="edit_quantidade" type="number"></div>
+      <div class="field"><label>Data do pedido</label><input id="edit_dataPedido"></div>
+      <div class="field"><label>Projeto?</label><input id="edit_projeto"></div>
+      <div class="field"><label>Tipo de faturamento</label><input id="edit_tipoFaturamento"></div>
+    </div>
+    <div class="modalActions">
+      <button class="btn secondary" onclick="closeEditModal()">Cancelar</button>
+      <button class="btn" onclick="saveEditPedido()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap" id="appWrap" style="display:none">
+  <div class="topbar">
+    <h1>Conciliador de pedidos x notas fiscais</h1>
+    <div class="userbox"><span id="userEmail"></span><button class="btn icon" id="themeToggle" onclick="toggleTheme()" title="Alternar tema">🌙</button><button class="btn secondary" onclick="doLogout()">Sair</button></div>
+  </div>
+
+  <div class="summary" id="summary"></div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="pedidos" onclick="showTab('pedidos')">Pedidos</button>
+    <button class="tab" data-tab="escolas" onclick="showTab('escolas')">Escolas (CNPJ)</button>
+    <button class="tab" data-tab="depara" onclick="showTab('depara')">De-para SKU</button>
+    <button class="tab" data-tab="custos" onclick="showTab('custos')">Custos SKU</button>
+    <button class="tab" data-tab="faturamento" onclick="showTab('faturamento')">De-para Faturamento</button>
+    <button class="tab" data-tab="concpedidos" onclick="showTab('concpedidos')">Conciliação de Pedidos</button>
+    <button class="tab" data-tab="nfs" onclick="showTab('nfs')">Conciliação de NFs</button>
+  </div>
+
+  <div id="tab-pedidos" class="tabcontent">
+    <div class="card">
+      <div class="filebox" onclick="document.getElementById('pedidosFile').click()">Clique para subir a planilha de pedidos enviada ao fornecedor (.xlsx, .xls ou .csv)</div>
+      <input type="file" id="pedidosFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handlePedidosFile(this.files[0])">
+      <div class="hint">Colunas reconhecidas: ID Escola, Coleção, Volume, Quantidade, Data do pedido, Projeto?, Tipo de faturamento. Essa base sempre <strong>acumula</strong>.</div>
+      <div id="pedidosImportWarn"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn danger" onclick="clearPedidos()">Zerar base de pedidos</button>
+        <button class="btn secondary" onclick="exportarPedidosCSV()">Exportar pedidos em CSV</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row" style="margin-bottom:0">
+        <div class="field"><label>Escola</label><select id="filtro_escola" onchange="onEscolaFiltroChange()"><option value="">Selecionar escola</option></select></div>
+        <div class="field"><label>Selo</label><select id="filtro_selo" onchange="renderPedidosFromCache()"><option value="">Todos</option></select></div>
+        <div class="field"><label>Coleção</label><input id="filtro_colecao" list="colecao_datalist" placeholder="Digite para buscar..." oninput="renderPedidosFromCache()"><datalist id="colecao_datalist"></datalist></div>
+        <div class="field"><label>Volume</label><select id="filtro_volume" onchange="renderPedidosFromCache()"><option value="">Todos</option></select></div>
+        <button class="btn secondary" onclick="limparFiltrosPedidos()">Limpar filtros</button>
+        <button class="btn secondary" onclick="onEscolaFiltroChange()" title="Os pedidos não atualizam sozinhos em tempo real (para economizar leituras) — clique para buscar de novo">Atualizar</button>
+      </div>
+      <div class="hint">Por economia de leituras, essa lista não fica ao vivo — clique em "Atualizar" para buscar as mudanças mais recentes.</div>
+    </div>
+    <div class="card"><div id="pedidosTable"></div></div>
+  </div>
+
+  <div id="tab-escolas" class="tabcontent" style="display:none">
+    <div class="card">
+      <div class="filebox" onclick="document.getElementById('escolasFile').click()">Clique para subir a base de Escola × CNPJ (.xlsx, .xls ou .csv)</div>
+      <input type="file" id="escolasFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleEscolasFile(this.files[0])">
+      <div class="hint">Usada para achar o CNPJ da escola na hora de conferir a NF. Cada upload <strong>substitui</strong> a base inteira.</div>
+      <div class="row" style="margin-top:12px">
+        <div class="field"><label>ID Escola</label><input id="e_id"></div>
+        <div class="field"><label>CNPJ de faturamento</label><input id="e_cnpj"></div>
+        <button class="btn" onclick="addEscolaManual()">Adicionar / atualizar</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row" style="margin-bottom:0"><div class="field" style="min-width:280px"><label>Buscar</label><input id="busca_escolas" placeholder="Buscar por escola ou CNPJ..." oninput="renderEscolas()"></div></div>
+    </div>
+    <div class="card"><div id="escolasTable"></div></div>
+  </div>
+
+  <div id="tab-depara" class="tabcontent" style="display:none">
+    <div class="card">
+      <div class="filebox" onclick="document.getElementById('deparaFile').click()">Clique para subir a base de-para (.xlsx, .xls ou .csv)</div>
+      <input type="file" id="deparaFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleDeparaFile(this.files[0])">
+      <div class="hint">Colunas esperadas: Selo, Coleção, Volume, SKU. Cada upload <strong>substitui</strong> a base inteira. Se um SKU compõe mais de uma coleção, adicione uma linha para cada combinação.</div>
+      <div class="row" style="margin-top:12px">
+        <div class="field"><label>Selo</label><input id="d_selo"></div>
+        <div class="field"><label>Coleção</label><input id="d_colecao"></div>
+        <div class="field"><label>Volume</label><input id="d_volume"></div>
+        <div class="field"><label>SKU</label><input id="d_sku"></div>
+        <button class="btn" onclick="addDeparaManual()">Adicionar</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row" style="margin-bottom:0"><div class="field" style="min-width:280px"><label>Buscar</label><input id="busca_depara" placeholder="Buscar por selo, coleção, volume ou SKU..." oninput="renderDepara()"></div></div>
+    </div>
+    <div class="card"><div id="deparaTable"></div></div>
+  </div>
+
+  <div id="tab-custos" class="tabcontent" style="display:none">
+    <div class="card">
+      <div class="filebox" onclick="document.getElementById('custosFile').click()">Clique para subir a base de custos por SKU (.xlsx, .xls ou .csv)</div>
+      <input type="file" id="custosFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleCustosFile(this.files[0])">
+      <div class="hint">Colunas esperadas: ID Escola, Coleção, Volume, SKU, Custo unitário. O custo pode variar por escola — cada upload <strong>substitui</strong> a base inteira.</div>
+      <div id="custosImportWarn"></div>
+      <div class="row" style="margin-top:12px">
+        <div class="field"><label>ID Escola</label><input id="c_idEscola"></div>
+        <div class="field"><label>Coleção</label><input id="c_colecao"></div>
+        <div class="field"><label>Volume</label><input id="c_volume"></div>
+        <div class="field"><label>SKU</label><input id="c_sku"></div>
+        <div class="field"><label>Custo unitário (R$)</label><input id="c_preco" type="number"></div>
+        <button class="btn" onclick="addCustoManual()">Adicionar / atualizar</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row" style="margin-bottom:0"><div class="field" style="min-width:280px"><label>Buscar</label><input id="busca_custos" placeholder="Buscar por escola, coleção, volume ou SKU..." oninput="renderCustos()"></div></div>
+    </div>
+    <div class="card"><div id="custosTable"></div></div>
+  </div>
+
+  <div id="tab-faturamento" class="tabcontent" style="display:none">
+    <div class="card">
+      <div class="filebox" onclick="document.getElementById('faturamentoFile').click()">Clique para subir a base de de-para de faturamento (.xlsx, .xls ou .csv)</div>
+      <input type="file" id="faturamentoFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleFaturamentoFile(this.files[0])">
+      <div class="hint">Colunas esperadas: Tipo de faturamento na NF, Tipo de faturamento em Pedidos. Isso liga a frase longa que vem no XML (ex: "VENDA DE MERCADORIA...") ao termo curto que vocês usam em Pedidos (ex: "Venda"). Cada upload <strong>substitui</strong> a base inteira.</div>
+      <div id="faturamentoImportWarn"></div>
+      <div class="row" style="margin-top:12px">
+        <div class="field"><label>Tipo de faturamento na NF</label><input id="f_tipoNF" placeholder="VENDA DE MERCADORIA ADQUIRIDA OU RECEBIDA DE TERCEIROS"></div>
+        <div class="field"><label>Tipo de faturamento em Pedidos</label><input id="f_tipoPedido" placeholder="Venda"></div>
+        <button class="btn" onclick="addFaturamentoManual()">Adicionar / atualizar</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row" style="margin-bottom:0"><div class="field" style="min-width:280px"><label>Buscar</label><input id="busca_faturamento" placeholder="Buscar..." oninput="renderFaturamento()"></div></div>
+    </div>
+    <div class="card"><div id="faturamentoTable"></div></div>
+  </div>
+
+  <div id="tab-concpedidos" class="tabcontent" style="display:none">
+    <div class="card">
+      <div class="filebox" onclick="document.getElementById('concPedidosFile').click()">Clique para subir a planilha padrão de conciliação (dados do fornecedor no modelo padrão)</div>
+      <input type="file" id="concPedidosFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleConcPedidosFile(this.files[0])">
+      <div class="hint">Colunas do modelo padrão: ID Escola, SKU, Quantidade, Nº do pedido, <strong>Data do pedido</strong> (a data em que nós fizemos o pedido, não a data em que o fornecedor respondeu). A ferramenta busca a combinação exata de Escola + SKU + Data do pedido, então não há ambiguidade entre pedidos parecidos. Se a quantidade informada for menor que a esperada pra esse SKU, o saldo restante fica guardado pra próxima conciliação completar.</div>
+      <div id="concPedidosWarn"></div>
+      <div class="row" style="margin-top:12px"><button class="btn secondary" onclick="limparResultadoConciliacao()">Limpar resultado</button></div>
+    </div>
+    <div class="card"><div id="concPedidosResultado"><div class="empty">Nenhuma conciliação processada ainda nesta sessão.</div></div></div>
+  </div>
+
+  <div id="tab-nfs" class="tabcontent" style="display:none">
+    <div class="card">
+      <div class="filebox" id="nfFilebox" onclick="document.getElementById('nfFile').click()">Clique para selecionar o(s) XML(s) da NF-e (pode selecionar vários de uma vez)</div>
+      <input type="file" id="nfFile" accept=".xml" multiple style="display:none" onchange="handleNFFiles(this.files)">
+    </div>
+    <div class="card"><div id="nfsList"></div></div>
+  </div>
+</div>
+
+<script>
+// =====================================================================
+// 1) CONFIGURAÇÃO DO FIREBASE — troque pelos dados do SEU projeto
+//    (Firebase Console > Configurações do projeto > Seus apps > SDK setup)
+// =====================================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyDhOZ-SHwT8FZrN-6HYOGx8wLpx8VhGu68",
+  authDomain: "ferramentadepara.firebaseapp.com",
+  projectId: "ferramentadepara",
+  storageBucket: "ferramentadepara.firebasestorage.app",
+  messagingSenderId: "909744800708",
+  appId: "1:909744800708:web:25c390afef260a5cf49a91"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+// =====================================================================
+// 2) Estado local (mantido em sincronia em tempo real com o Firestore)
+// =====================================================================
+var STATE = { pedidos: [], escolas: [], depara: [], custos: [], faturamento: [], nfs: [] };
+var unsubscribers = [];
+
+function fmtMoney(v){ return "R$ " + (Number(v)||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmtDate(iso){ if(!iso) return ''; var d=new Date(iso); return isNaN(d.getTime())?'':d.toLocaleDateString('pt-BR'); }
+function normText(s){ return (s||"").toString().normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9 ]/g,"").replace(/\s+/g,' ').trim(); }
+function onlyDigits(s){ return (s||"").toString().replace(/\D/g,""); }
+// Padroniza texto como "Venda", "Bonificação" etc: 1ª letra maiúscula, resto minúsculo
+function capitalizarPrimeira(s){
+  s = (s||'').toString().trim();
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+var cancelRequested = false;
+function showLoading(msg, cancelable){
+  document.getElementById('loadingText').textContent = msg||'Carregando...';
+  document.getElementById('loadingOverlay').style.display='flex';
+  document.getElementById('cancelUploadBtn').style.display = cancelable ? 'inline-block' : 'none';
+}
+function hideLoading(){ document.getElementById('loadingOverlay').style.display='none'; }
+function requestCancelUpload(){ cancelRequested = true; }
+function onError(err){ hideLoading(); alert('Ocorreu um erro: ' + (err && err.message ? err.message : err)); console.error(err); }
+
+// =====================================================================
+// Tema claro/escuro
+// =====================================================================
+function applyTheme(theme){
+  document.documentElement.setAttribute('data-theme', theme);
+  var btn = document.getElementById('themeToggle');
+  if (btn) btn.textContent = theme==='dark' ? '☀️' : '🌙';
+}
+function toggleTheme(){
+  var atual = document.documentElement.getAttribute('data-theme') || 'light';
+  var novo = atual==='dark' ? 'light' : 'dark';
+  applyTheme(novo);
+  try { localStorage.setItem('conciliador_theme', novo); } catch(e){}
+}
+(function initTheme(){
+  var salvo = null;
+  try { salvo = localStorage.getItem('conciliador_theme'); } catch(e){}
+  if (salvo){ applyTheme(salvo); }
+  else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches){ applyTheme('dark'); }
+  else { applyTheme('light'); }
+})();
+
+// =====================================================================
+// 3) Autenticação
+// =====================================================================
+function doLogin(){
+  var email = document.getElementById('loginEmail').value;
+  var pass = document.getElementById('loginPassword').value;
+  document.getElementById('loginError').textContent = '';
+  showLoading('Entrando...');
+  auth.signInWithEmailAndPassword(email, pass).then(function(){
+    hideLoading();
+  }).catch(function(err){
+    hideLoading();
+    document.getElementById('loginError').textContent = 'Não consegui entrar: ' + err.message;
+  });
+}
+function doLogout(){ auth.signOut(); }
+
+auth.onAuthStateChanged(function(user){
+  if (user){
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('appWrap').style.display = 'block';
+    document.getElementById('userEmail').textContent = user.email;
+    startListeners();
+  } else {
+    document.getElementById('appWrap').style.display = 'none';
+    document.getElementById('loginScreen').style.display = 'block';
+    unsubscribers.forEach(function(u){ u(); });
+    unsubscribers = [];
+  }
+});
+
+// =====================================================================
+// 4) Listeners em tempo real (todo mundo vê a mesma base ao vivo)
+// =====================================================================
+function startListeners(){
+  showLoading('Carregando base...');
+  var loadedOnce = { e:false, d:false, c:false, f:false, n:false };
+  function maybeHide(){ if (loadedOnce.e && loadedOnce.d && loadedOnce.c && loadedOnce.f && loadedOnce.n) { hideLoading(); renderPedidos(); refreshSummary(); } }
+
+  // NFs: limitado às mais recentes para não crescer sem controle com o tempo
+  unsubscribers.push(db.collection('conciliador_nfs').orderBy('processadoEm','desc').limit(1000).onSnapshot(function(snap){
+    STATE.nfs = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+    loadedOnce.n = true; renderNFs(); refreshSummary(); maybeHide();
+  }, onError));
+
+  unsubscribers.push(db.doc('conciliador_reference/escolas').onSnapshot(function(doc){
+    STATE.escolas = doc.exists ? (doc.data().lista||[]) : [];
+    loadedOnce.e = true; renderEscolas(); maybeHide();
+  }, onError));
+
+  unsubscribers.push(db.doc('conciliador_reference/depara').onSnapshot(function(doc){
+    STATE.depara = doc.exists ? (doc.data().lista||[]) : [];
+    loadedOnce.d = true; renderDepara(); maybeHide();
+  }, onError));
+
+  unsubscribers.push(db.doc('conciliador_reference/custos').onSnapshot(function(doc){
+    STATE.custos = doc.exists ? (doc.data().lista||[]) : [];
+    loadedOnce.c = true; renderCustos(); maybeHide();
+  }, onError));
+
+  unsubscribers.push(db.doc('conciliador_reference/faturamento').onSnapshot(function(doc){
+    STATE.faturamento = doc.exists ? (doc.data().lista||[]) : [];
+    loadedOnce.f = true; renderFaturamento(); maybeHide();
+  }, onError));
+}
+
+function showTab(name){
+  ['pedidos','escolas','depara','custos','faturamento','concpedidos','nfs'].forEach(function(t){
+    document.getElementById('tab-'+t).style.display = (t===name)?'block':'none';
+    document.querySelector('.tab[data-tab="'+t+'"]').classList.toggle('active', t===name);
+  });
+}
+
+// Contadores via consultas de contagem (count()) — custam 1 leitura cada, não importa o tamanho da base
+function refreshSummary(){
+  db.doc('conciliador_reference/stats').get().then(function(doc){
+    var d = doc.exists ? doc.data() : {};
+    var abertos = d.abertos||0, parciais = d.parciais||0, concluidos = d.concluidos||0;
+    var conciliadas = STATE.nfs.filter(function(n){return n.status==='conciliada';}).length;
+    var revisao = STATE.nfs.filter(function(n){return n.status!=='conciliada';}).length;
+    var stats = [[abertos,'Pedidos abertos'],[parciais,'Parcialmente atendidos'],[concluidos,'Concluídos'],[conciliadas,'NFs conciliadas'],[revisao,'NFs pendentes de revisão']];
+    document.getElementById('summary').innerHTML = stats.map(function(s){ return '<div class="stat"><div class="n">'+s[0]+'</div><div class="l">'+s[1]+'</div></div>'; }).join('')
+      + '<button class="btn secondary" style="align-self:center" onclick="recalcularContadores()" title="Recalcula do zero lendo a base inteira — use só se os números parecerem errados">Recalcular</button>';
+  }).catch(function(err){ console.error('Falha ao ler contadores', err); });
+}
+
+// Ação manual de manutenção: relê a base inteira e corrige o contador, caso ele saia de sincronia por algum motivo
+function recalcularContadores(){
+  showLoading('Recalculando contadores (pode demorar com muitos pedidos)...');
+  var col = db.collection('conciliador_pedidos');
+  Promise.all([
+    col.where('status','==','aberto').get(),
+    col.where('status','==','parcial').get(),
+    col.where('status','==','concluido').get(),
+  ]).then(function(snaps){
+    return db.doc('conciliador_reference/stats').set({ abertos: snaps[0].size, parciais: snaps[1].size, concluidos: snaps[2].size });
+  }).then(function(){ hideLoading(); refreshSummary(); }).catch(onError);
+}
+
+// =====================================================================
+// 5) Pedidos
+// =====================================================================
+function getSeloForColecao(colecao){
+  var row = STATE.depara.filter(function(d){ return normText(d.colecao)===normText(colecao); })[0];
+  return row ? row.selo : '';
+}
+
+function populateFiltroSelect(id, values, allLabel){
+  var el = document.getElementById(id);
+  var atual = el.value;
+  var unicos = Array.from(new Set(values.filter(Boolean))).sort(function(a,b){ return normText(a).localeCompare(normText(b)); });
+  el.innerHTML = '<option value="">'+allLabel+'</option>' + unicos.map(function(v){ return '<option value="'+v+'">'+v+'</option>'; }).join('');
+  if (unicos.indexOf(atual)>=0) el.value = atual;
+}
+
+function limparFiltrosPedidos(){
+  document.getElementById('filtro_escola').value = '';
+  onEscolaFiltroChange();
+}
+
+function popularFiltroEscolas(){
+  populateFiltroSelect('filtro_escola', STATE.escolas.map(function(e){return e.idEscola;}), 'Selecionar escola');
+}
+
+var escolaPedidosCache = [];
+var LIMITE_LINHAS_PEDIDOS = 300;
+
+function onEscolaFiltroChange(){
+  document.getElementById('filtro_selo').value = '';
+  document.getElementById('filtro_colecao').value = '';
+  document.getElementById('filtro_volume').value = '';
+  var idEscola = document.getElementById('filtro_escola').value;
+  var el = document.getElementById('pedidosTable');
+  if (!idEscola){
+    escolaPedidosCache = [];
+    document.getElementById('filtro_selo').innerHTML = '<option value="">Todos</option>';
+    document.getElementById('filtro_volume').innerHTML = '<option value="">Todos</option>';
+    document.getElementById('colecao_datalist').innerHTML = '';
+    el.innerHTML = '<div class="empty">Selecione uma escola acima para ver os pedidos dela.</div>';
+    return;
+  }
+  el.innerHTML = '<div class="empty">Buscando pedidos da escola...</div>';
+  db.collection('conciliador_pedidos').where('idEscola','==',idEscola).get().then(function(snap){
+    escolaPedidosCache = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); })
+      .map(function(p){ return Object.assign({}, p, { selo: getSeloForColecao(p.colecao) }); });
+    popularSubFiltros();
+    renderPedidosFromCache();
+  }).catch(function(err){
+    el.innerHTML = '<div class="empty">Erro ao buscar pedidos: '+err.message+'</div>';
+    console.error(err);
+  });
+}
+
+function popularSubFiltros(){
+  populateFiltroSelect('filtro_selo', escolaPedidosCache.map(function(p){return p.selo;}), 'Todos');
+  populateFiltroSelect('filtro_volume', escolaPedidosCache.map(function(p){return p.volume;}), 'Todos');
+  var colecoes = Array.from(new Set(escolaPedidosCache.map(function(p){return p.colecao;}).filter(Boolean)))
+    .sort(function(a,b){ return normText(a).localeCompare(normText(b)); });
+  document.getElementById('colecao_datalist').innerHTML = colecoes.map(function(c){ return '<option value="'+c+'">'; }).join('');
+}
+
+var COLUNAS_PEDIDOS = [
+  { campo:'idEscola', label:'Escola' },
+  { campo:'colecao', label:'Coleção' },
+  { campo:'volume', label:'Vol.' },
+  { campo:'quantidade', label:'Qtd.' },
+  { campo:'dataPedido', label:'Data do pedido' },
+  { campo:'projeto', label:'Projeto?' },
+  { campo:'tipoFaturamento', label:'Tipo fat.' },
+  { campo:'criadoEm', label:'Data de upload' },
+  { campo:'numeroPedidoFornecedor', label:'Nº do pedido' },
+  { campo:'numeroNF', label:'NF' },
+  { campo:'status', label:'Status' },
+];
+var sortPedidos = { campo:'dataPedido', direcao:'asc' };
+
+function toggleSortPedidos(campo){
+  if (sortPedidos.campo===campo) sortPedidos.direcao = sortPedidos.direcao==='asc' ? 'desc' : 'asc';
+  else { sortPedidos.campo = campo; sortPedidos.direcao = 'asc'; }
+  renderPedidosFromCache();
+}
+
+function parseBRDate(str){
+  if (!str) return null;
+  var m = String(str).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  return new Date(Number(m[3]), Number(m[2])-1, Number(m[1]));
+}
+
+function compararPedidos(a, b, campo){
+  if (campo==='quantidade') return (Number(a.quantidade)||0) - (Number(b.quantidade)||0);
+  if (campo==='criadoEm') return new Date(a.criadoEm||0) - new Date(b.criadoEm||0);
+  if (campo==='dataPedido'){
+    var da = parseBRDate(a.dataPedido), db = parseBRDate(b.dataPedido);
+    if (da && db) return da-db;
+    return normText(a.dataPedido).localeCompare(normText(b.dataPedido));
+  }
+  if (campo==='volume'){
+    var na = parseFloat(a.volume), nb = parseFloat(b.volume);
+    if (!isNaN(na) && !isNaN(nb) && na!==nb) return na-nb;
+    return normText(String(a.volume||'')).localeCompare(normText(String(b.volume||'')));
+  }
+  return normText(String(a[campo]||'')).localeCompare(normText(String(b[campo]||'')));
+}
+
+function renderPedidosFromCache(){
+  var el = document.getElementById('pedidosTable');
+  if (!document.getElementById('filtro_escola').value){
+    el.innerHTML = '<div class="empty">Selecione uma escola acima para ver os pedidos dela.</div>';
+    return;
+  }
+  var fSelo = document.getElementById('filtro_selo').value;
+  var fColecaoTexto = normText(document.getElementById('filtro_colecao').value);
+  var fVolume = document.getElementById('filtro_volume').value;
+
+  var filtrados = escolaPedidosCache.filter(function(p){
+    return (!fSelo || p.selo===fSelo)
+      && (!fColecaoTexto || normText(p.colecao).indexOf(fColecaoTexto)>=0)
+      && (!fVolume || String(p.volume)===String(fVolume));
+  });
+
+  STATE.pedidos = filtrados;
+
+  if (filtrados.length===0){ el.innerHTML = '<div class="empty">Nenhum pedido encontrado para esse filtro.</div>'; return; }
+
+  var totalQtd = filtrados.reduce(function(acc,p){ return acc + (Number(p.quantidade)||0); }, 0);
+  var ordenados = filtrados.slice().sort(function(a,b){
+    var r = compararPedidos(a, b, sortPedidos.campo);
+    return sortPedidos.direcao==='asc' ? r : -r;
+  });
+  var visiveis = ordenados.slice(0, LIMITE_LINHAS_PEDIDOS);
+
+  var aviso = ordenados.length > LIMITE_LINHAS_PEDIDOS
+    ? '<div class="warn">Mostrando '+LIMITE_LINHAS_PEDIDOS+' de '+ordenados.length+' pedidos, mas o total abaixo já soma todos os '+ordenados.length+'.</div>'
+    : '';
+
+  var rows = visiveis.map(function(p){
+    var statusLabel = p.status==='aberto'?'Aberto':p.status==='parcial'?'Parcial':'Concluído';
+    var editandoNumero = !!editandoNumeroPedido[p.id];
+    var celulaNumero;
+    if (p.numeroPedidoFornecedor && !editandoNumero){
+      celulaNumero = '<span>'+p.numeroPedidoFornecedor+'</span> '+
+        '<button class="btn icon" title="Editar número do pedido" onclick="editarNumeroPedido(\''+p.id+'\')">✎</button>';
+    } else {
+      celulaNumero = '<input id="np_'+p.id+'" value="'+(p.numeroPedidoFornecedor||'')+'" style="width:110px"> '+
+        '<button class="btn icon" title="Salvar número do pedido" onclick="salvarNumeroPedido(\''+p.id+'\')">✔</button>';
+    }
+    return '<tr><td>'+p.idEscola+'</td><td>'+p.colecao+'</td><td>'+p.volume+'</td><td>'+p.quantidade+'</td>'+
+      '<td>'+p.dataPedido+'</td><td>'+p.projeto+'</td><td>'+capitalizarPrimeira(p.tipoFaturamento)+'</td>'+
+      '<td>'+fmtDate(p.criadoEm)+'</td>'+
+      '<td>'+celulaNumero+'</td>'+
+      '<td>'+(p.numeroNF||'')+'</td>'+
+      '<td><span class="pill '+p.status+'">'+statusLabel+'</span></td>'+
+      '<td style="white-space:nowrap"><button class="btn icon" title="Editar pedido" onclick="openEditPedido(\''+p.id+'\')">✎</button> '+
+      '<button class="btn icon" title="Remover pedido" onclick="removePedido(\''+p.id+'\')">🗑</button></td></tr>';
+  }).join('');
+  var totalRow = '<tr><td colspan="3" style="text-align:right;font-weight:600;">Total (filtro atual, '+ordenados.length+' pedido(s)):</td>'+
+    '<td style="font-weight:600;">'+totalQtd+'</td><td colspan="8"></td></tr>';
+  var headerCols = COLUNAS_PEDIDOS.map(function(c){
+    var seta = sortPedidos.campo===c.campo ? (sortPedidos.direcao==='asc' ? ' \u25B2' : ' \u25BC') : '';
+    return '<th style="cursor:pointer;user-select:none" onclick="toggleSortPedidos(\''+c.campo+'\')" title="Clique para ordenar">'+c.label+seta+'</th>';
+  }).join('') + '<th></th>';
+  el.innerHTML = aviso + '<table><thead><tr>'+headerCols+'</tr></thead><tbody>'+rows+totalRow+'</tbody></table>';
+}
+
+// Chamada após uploads/edições/remoções: repopula o seletor de escolas e, se uma já estiver escolhida, busca de novo
+function renderPedidos(){
+  popularFiltroEscolas();
+  if (document.getElementById('filtro_escola').value) onEscolaFiltroChange();
+  else document.getElementById('pedidosTable').innerHTML = '<div class="empty">Selecione uma escola acima para ver os pedidos dela.</div>';
+}
+
+var EDIT_FIELDS = ['idEscola','colecao','volume','quantidade','dataPedido','projeto','tipoFaturamento'];
+
+function openEditPedido(id){
+  var p = STATE.pedidos.filter(function(x){ return String(x.id)===String(id); })[0];
+  if (!p) return;
+  document.getElementById('editPedidoModal').dataset.editingId = id;
+  EDIT_FIELDS.forEach(function(f){
+    var el = document.getElementById('edit_'+f);
+    if (!el) return;
+    var v = p[f] !== undefined && p[f] !== null ? p[f] : '';
+    el.value = f==='tipoFaturamento' ? capitalizarPrimeira(v) : v;
+  });
+  document.getElementById('editPedidoModal').style.display = 'flex';
+}
+
+function closeEditModal(){
+  document.getElementById('editPedidoModal').style.display = 'none';
+}
+
+function saveEditPedido(){
+  var id = document.getElementById('editPedidoModal').dataset.editingId;
+  if (!id) return;
+  var updates = {};
+  EDIT_FIELDS.forEach(function(f){
+    var el = document.getElementById('edit_'+f);
+    if (!el) return;
+    if (f==='quantidade') updates[f] = Number(el.value)||0;
+    else if (f==='tipoFaturamento') updates[f] = capitalizarPrimeira(el.value);
+    else updates[f] = el.value;
+  });
+  showLoading('Salvando...');
+  db.collection('conciliador_pedidos').doc(id).update(updates).then(function(){
+    closeEditModal(); hideLoading(); renderPedidos(); refreshSummary();
+  }).catch(onError);
+}
+
+// Converte valores de data vindos do Excel (podem chegar como objeto Date ou já como texto)
+function excelValueToDateStr(v){
+  if (v instanceof Date && !isNaN(v.getTime())) return v.toLocaleDateString('pt-BR');
+  return v;
+}
+
+// Grava/apaga em lotes menores para não estourar o limite de tamanho/quantidade do Firestore por lote
+function commitInChunks(items, applyToBatch, chunkSize, onProgress){
+  chunkSize = chunkSize || 400;
+  var chunks = [];
+  for (var i=0;i<items.length;i+=chunkSize) chunks.push(items.slice(i, i+chunkSize));
+  var done = 0;
+  function next(idx){
+    if (cancelRequested){ cancelRequested = false; return Promise.resolve({cancelled:true, done:done, total:items.length}); }
+    if (idx>=chunks.length) return Promise.resolve({cancelled:false, done:done, total:items.length});
+    var batch = db.batch();
+    chunks[idx].forEach(function(item){ applyToBatch(batch, item); });
+    return batch.commit().then(function(){
+      done += chunks[idx].length;
+      if (onProgress) onProgress(done, items.length);
+      return next(idx+1);
+    });
+  }
+  return next(0);
+}
+
+function handlePedidosFile(file){
+  if (!file) return;
+  showLoading('Lendo base de pedidos...', true);
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+      if (rows.length<2){ hideLoading(); return; }
+      var rawHeaders = rows[0].map(function(h){ return normText(h); });
+      var idx = {
+        idEscola: rawHeaders.findIndex(function(h){ return h.indexOf('escola')>=0; }),
+        colecao: rawHeaders.findIndex(function(h){ return h.indexOf('colecao')>=0; }),
+        volume: rawHeaders.findIndex(function(h){ return h.indexOf('volume')>=0; }),
+        quantidade: rawHeaders.findIndex(function(h){ return h.indexOf('quant')>=0; }),
+        dataPedido: rawHeaders.findIndex(function(h){ return h.indexOf('data')>=0; }),
+        projeto: rawHeaders.findIndex(function(h){ return h.indexOf('projeto')>=0; }),
+        tipoFaturamento: rawHeaders.findIndex(function(h){ return h.indexOf('faturamento')>=0; }),
+      };
+      var naoReconhecidas = rows[0].filter(function(h,i){ return h && Object.keys(idx).every(function(k){ return idx[k]!==i; }); });
+      document.getElementById('pedidosImportWarn').innerHTML = naoReconhecidas.length ? '<div class="warn">Colunas não reconhecidas (ignoradas): '+naoReconhecidas.join(', ')+'</div>' : '';
+
+      var objetos = [];
+      for (var i=1;i<rows.length;i++){
+        var r = rows[i];
+        if (!r || r.every(function(c){return c==='' || c==null;})) continue;
+        var idEscola = idx.idEscola>=0 ? String(r[idx.idEscola]||'').trim() : '';
+        var colecao = idx.colecao>=0 ? String(r[idx.colecao]||'').trim() : '';
+        if (!idEscola || !colecao) continue;
+        var obj = {
+          idEscola: idEscola, colecao: colecao,
+          volume: idx.volume>=0 ? String(r[idx.volume]||'').trim() : '',
+          quantidade: idx.quantidade>=0 ? (Number(r[idx.quantidade])||0) : 0,
+          dataPedido: idx.dataPedido>=0 ? excelValueToDateStr(r[idx.dataPedido]) : '',
+          projeto: idx.projeto>=0 ? String(r[idx.projeto]||'').trim() : '',
+          tipoFaturamento: idx.tipoFaturamento>=0 ? capitalizarPrimeira(r[idx.tipoFaturamento]) : '',
+          status:'aberto', recebido:{}, criadoEm: new Date().toISOString(), numeroNF:'', numeroPedidoFornecedor:'', coberturaSku:{},
+        };
+        objetos.push(obj);
+      }
+      if (objetos.length===0){ hideLoading(); return; }
+      commitInChunks(objetos, function(batch, obj){
+        batch.set(db.collection('conciliador_pedidos').doc(), obj);
+      }, 400, function(done, total){ showLoading('Salvando pedidos... ('+done+'/'+total+')', true); })
+        .then(function(result){
+          hideLoading();
+          if (result.cancelled) alert('Upload cancelado. '+result.done+' de '+result.total+' pedidos foram salvos antes do cancelamento.');
+          var incremento = {};
+          incremento['abertos'] = firebase.firestore.FieldValue.increment(result.done);
+          return db.doc('conciliador_reference/stats').set(incremento, {merge:true});
+        }).then(function(){ renderPedidos(); refreshSummary(); }).catch(onError);
+      document.getElementById('pedidosFile').value='';
+    } catch(err){ onError(err); }
+  };
+  reader.onerror = function(){ hideLoading(); alert('Não consegui ler o arquivo.'); };
+  reader.readAsArrayBuffer(file);
+}
+
+var editandoNumeroPedido = {};
+
+function editarNumeroPedido(id){
+  editandoNumeroPedido[id] = true;
+  renderPedidosFromCache();
+}
+
+function salvarNumeroPedido(id){
+  var el = document.getElementById('np_'+id);
+  if (!el) return;
+  var valor = el.value.trim();
+  var arr = valor.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+  showLoading('Salvando número do pedido...');
+  db.collection('conciliador_pedidos').doc(id).update({ numeroPedidoFornecedor: arr.join(', '), numerosPedidoArray: arr }).then(function(){
+    var p = escolaPedidosCache.filter(function(x){ return String(x.id)===String(id); })[0];
+    if (p){ p.numeroPedidoFornecedor = arr.join(', '); p.numerosPedidoArray = arr; }
+    editandoNumeroPedido[id] = false;
+    hideLoading();
+    renderPedidosFromCache();
+  }).catch(onError);
+}
+
+function removePedido(id){
+  showLoading('Removendo...');
+  var ref = db.collection('conciliador_pedidos').doc(id);
+  ref.get().then(function(doc){
+    var statusAtual = doc.exists ? (doc.data().status||'aberto') : null;
+    return ref.delete().then(function(){
+      if (!statusAtual) return;
+      var incremento = {};
+      incremento[statusAtual==='aberto'?'abertos':statusAtual==='parcial'?'parciais':'concluidos'] = firebase.firestore.FieldValue.increment(-1);
+      return db.doc('conciliador_reference/stats').set(incremento, {merge:true});
+    });
+  }).then(function(){
+    hideLoading(); renderPedidos(); refreshSummary();
+  }).catch(onError);
+}
+
+function csvEscape(v){
+  var s = (v===undefined || v===null) ? '' : String(v);
+  if (/[",;\n]/.test(s)) s = '"' + s.replace(/"/g,'""') + '"';
+  return s;
+}
+
+function exportarPedidosCSV(){
+  showLoading('Buscando toda a base de pedidos para exportar (pode demorar com muitos pedidos)...');
+  db.collection('conciliador_pedidos').get().then(function(snap){
+    var pedidos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
+    var cabecalho = ['ID Escola','Selo','Coleção','Volume','Quantidade','Data do pedido','Projeto?','Tipo de faturamento','Nº do pedido','NF','Status','Data de upload'];
+    var linhas = [cabecalho.join(';')];
+    pedidos.forEach(function(p){
+      var statusLabel = p.status==='aberto'?'Aberto':p.status==='parcial'?'Parcial':'Concluído';
+      linhas.push([
+        csvEscape(p.idEscola), csvEscape(getSeloForColecao(p.colecao)), csvEscape(p.colecao), csvEscape(p.volume), csvEscape(p.quantidade),
+        csvEscape(p.dataPedido), csvEscape(p.projeto), csvEscape(capitalizarPrimeira(p.tipoFaturamento)),
+        csvEscape(p.numeroPedidoFornecedor), csvEscape(p.numeroNF), csvEscape(statusLabel), csvEscape(fmtDate(p.criadoEm)),
+      ].join(';'));
+    });
+    var csv = '\uFEFF' + linhas.join('\r\n'); // BOM para o Excel abrir acentos corretamente
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'pedidos_' + new Date().toISOString().slice(0,10) + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    hideLoading();
+  }).catch(onError);
+}
+
+function clearPedidos(){
+  if (!confirm('Isso vai apagar TODOS os pedidos cadastrados na base, sem volta. Tem certeza?')) return;
+  showLoading('Zerando base de pedidos...', true);
+  db.collection('conciliador_pedidos').get().then(function(snap){
+    return commitInChunks(snap.docs, function(batch, doc){ batch.delete(doc.ref); }, 400,
+      function(done, total){ showLoading('Zerando base de pedidos... ('+done+'/'+total+')', true); });
+  }).then(function(result){
+    hideLoading();
+    if (result && result.cancelled) alert('Cancelado. '+result.done+' de '+result.total+' pedidos foram removidos antes do cancelamento.');
+    return db.doc('conciliador_reference/stats').set({ abertos:0, parciais:0, concluidos:0 });
+  }).then(function(){
+    renderPedidos(); refreshSummary();
+  }).catch(onError);
+}
+
+// =====================================================================
+// 6) Escolas
+// =====================================================================
+function renderEscolas(){
+  var el = document.getElementById('escolasTable');
+  var busca = normText(document.getElementById('busca_escolas') ? document.getElementById('busca_escolas').value : '');
+  var filtradas = STATE.escolas.filter(function(e){
+    return !busca || normText(e.idEscola).indexOf(busca)>=0 || normText(e.cnpj).indexOf(busca)>=0;
+  });
+  if (filtradas.length===0){ el.innerHTML = '<div class="empty">'+(STATE.escolas.length===0?'Nenhuma escola cadastrada ainda.':'Nenhuma escola encontrada para essa busca.')+'</div>'; return; }
+  var ordenadas = filtradas.slice().sort(function(a,b){ return normText(a.idEscola).localeCompare(normText(b.idEscola)); });
+  var rows = ordenadas.map(function(e){ return '<tr><td>'+e.idEscola+'</td><td>'+e.cnpj+'</td></tr>'; }).join('');
+  el.innerHTML = '<table><thead><tr><th>ID Escola</th><th>CNPJ de faturamento</th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+
+function addEscolaManual(){
+  var idEscola = document.getElementById('e_id').value;
+  var cnpj = document.getElementById('e_cnpj').value;
+  if (!idEscola || !cnpj) return;
+  var novaLista = STATE.escolas.filter(function(e){ return normText(e.idEscola)!==normText(idEscola); });
+  novaLista.push({ idEscola: idEscola, cnpj: cnpj });
+  novaLista.sort(function(a,b){ return normText(a.idEscola).localeCompare(normText(b.idEscola)); });
+  showLoading('Salvando...');
+  db.doc('conciliador_reference/escolas').set({lista: novaLista}).then(function(){
+    document.getElementById('e_id').value=''; document.getElementById('e_cnpj').value=''; hideLoading();
+  }).catch(onError);
+}
+
+function handleEscolasFile(file){
+  if (!file) return;
+  showLoading('Lendo base de escolas...');
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+      if (rows.length<2){ hideLoading(); return; }
+      var rawHeaders = rows[0].map(function(h){ return normText(h); });
+      var idxEscola = rawHeaders.findIndex(function(h){ return h.indexOf('escola')>=0; });
+      var idxCnpj = rawHeaders.findIndex(function(h){ return h.indexOf('cnpj')>=0; });
+      var payload = [];
+      for (var i=1;i<rows.length;i++){
+        var r = rows[i];
+        if (!r || r.every(function(c){return c==='' || c==null;})) continue;
+        var idEscola = idxEscola>=0 ? String(r[idxEscola]||'').trim() : '';
+        var cnpj = idxCnpj>=0 ? String(r[idxCnpj]||'').trim() : '';
+        if (!idEscola) continue;
+        payload.push({ idEscola: idEscola, cnpj: cnpj });
+      }
+      payload.sort(function(a,b){ return normText(a.idEscola).localeCompare(normText(b.idEscola)); });
+      db.doc('conciliador_reference/escolas').set({lista: payload}).then(function(){
+        document.getElementById('escolasFile').value=''; hideLoading();
+      }).catch(onError);
+    } catch(err){ onError(err); }
+  };
+  reader.onerror = function(){ hideLoading(); alert('Não consegui ler o arquivo.'); };
+  reader.readAsArrayBuffer(file);
+}
+
+// =====================================================================
+// 7) De-para
+// =====================================================================
+function renderDepara(){
+  var el = document.getElementById('deparaTable');
+  var busca = normText(document.getElementById('busca_depara') ? document.getElementById('busca_depara').value : '');
+  var filtrados = STATE.depara.filter(function(d){
+    return !busca || normText(d.selo).indexOf(busca)>=0 || normText(d.colecao).indexOf(busca)>=0
+      || normText(String(d.volume)).indexOf(busca)>=0 || normText(d.sku).indexOf(busca)>=0;
+  });
+  if (filtrados.length===0){ el.innerHTML = '<div class="empty">'+(STATE.depara.length===0?'Nenhuma relação SKU cadastrada ainda.':'Nenhum resultado encontrado para essa busca.')+'</div>'; return; }
+  var rows = filtrados.map(function(d){
+    return '<tr><td>'+d.selo+'</td><td>'+d.colecao+'</td><td>'+d.volume+'</td><td>'+d.sku+'</td></tr>';
+  }).join('');
+  el.innerHTML = '<table><thead><tr><th>Selo</th><th>Coleção</th><th>Volume</th><th>SKU</th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+
+function addDeparaManual(){
+  var colecao = document.getElementById('d_colecao').value;
+  var sku = document.getElementById('d_sku').value;
+  if (!colecao || !sku) return;
+  var novo = {
+    selo: document.getElementById('d_selo').value, colecao: colecao,
+    volume: document.getElementById('d_volume').value, sku: sku,
+  };
+  var novaLista = STATE.depara.concat([novo]);
+  showLoading('Salvando...');
+  db.doc('conciliador_reference/depara').set({lista: novaLista}).then(function(){
+    ['d_selo','d_colecao','d_volume','d_sku'].forEach(function(id){ document.getElementById(id).value=''; });
+    hideLoading();
+  }).catch(onError);
+}
+
+var DEPARA_COLUMN_MAP = { 'selo':'selo', 'colecao':'colecao', 'volume':'volume' };
+
+function handleDeparaFile(file){
+  if (!file) return;
+  showLoading('Lendo base de de-para...');
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+      if (rows.length<2){ hideLoading(); return; }
+      var rawHeaders = rows[0].map(function(h){ return normText(h); });
+      var fieldIdx = {};
+      rawHeaders.forEach(function(h,i){ if (DEPARA_COLUMN_MAP[h]) fieldIdx[DEPARA_COLUMN_MAP[h]] = i; });
+      var idxSku = rawHeaders.findIndex(function(h){ return h.indexOf('sku')>=0 || h.indexOf('codigo')>=0 || h.indexOf('material')>=0; });
+      if (idxSku>=0) fieldIdx.sku = idxSku;
+      var payload = [];
+      for (var i=1;i<rows.length;i++){
+        var r = rows[i];
+        if (!r || r.every(function(c){return c==='' || c==null;})) continue;
+        var colecao = fieldIdx.colecao!==undefined ? String(r[fieldIdx.colecao]||'').trim() : '';
+        var sku = fieldIdx.sku!==undefined ? String(r[fieldIdx.sku]||'').trim() : '';
+        if (!colecao || !sku) continue;
+        var obj = {};
+        Object.keys(fieldIdx).forEach(function(field){ obj[field] = r[fieldIdx[field]]; });
+        payload.push(obj);
+      }
+      db.doc('conciliador_reference/depara').set({lista: payload}).then(function(){
+        document.getElementById('deparaFile').value=''; hideLoading();
+      }).catch(onError);
+    } catch(err){ onError(err); }
+  };
+  reader.onerror = function(){ hideLoading(); alert('Não consegui ler o arquivo.'); };
+  reader.readAsArrayBuffer(file);
+}
+
+// =====================================================================
+// 7b) Custos por SKU
+// =====================================================================
+function renderCustos(){
+  var el = document.getElementById('custosTable');
+  var busca = normText(document.getElementById('busca_custos') ? document.getElementById('busca_custos').value : '');
+  var filtrados = STATE.custos.filter(function(c){
+    return !busca || normText(c.idEscola).indexOf(busca)>=0 || normText(c.colecao).indexOf(busca)>=0
+      || normText(String(c.volume)).indexOf(busca)>=0 || normText(c.sku).indexOf(busca)>=0;
+  });
+  if (filtrados.length===0){ el.innerHTML = '<div class="empty">'+(STATE.custos.length===0?'Nenhum custo cadastrado ainda.':'Nenhum resultado encontrado para essa busca.')+'</div>'; return; }
+  var rows = filtrados.map(function(c){
+    return '<tr><td>'+c.idEscola+'</td><td>'+c.colecao+'</td><td>'+c.volume+'</td><td>'+c.sku+'</td><td>'+fmtMoney(c.preco)+'</td></tr>';
+  }).join('');
+  el.innerHTML = '<table><thead><tr><th>ID Escola</th><th>Coleção</th><th>Volume</th><th>SKU</th><th>Custo unitário</th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+
+function custoKey(c){ return normText(c.idEscola)+'|'+normText(c.colecao)+'|'+String(c.volume).trim()+'|'+normText(c.sku); }
+
+function addCustoManual(){
+  var idEscola = document.getElementById('c_idEscola').value;
+  var colecao = document.getElementById('c_colecao').value;
+  var volume = document.getElementById('c_volume').value;
+  var sku = document.getElementById('c_sku').value;
+  if (!idEscola || !colecao || !sku) return;
+  var preco = Number(document.getElementById('c_preco').value)||0;
+  var novo = { idEscola: idEscola, colecao: colecao, volume: volume, sku: sku, preco: preco };
+  var novaLista = STATE.custos.filter(function(c){ return custoKey(c)!==custoKey(novo); });
+  novaLista.push(novo);
+  showLoading('Salvando...');
+  db.doc('conciliador_reference/custos').set({lista: novaLista}).then(function(){
+    ['c_idEscola','c_colecao','c_volume','c_sku','c_preco'].forEach(function(id){ document.getElementById(id).value=''; });
+    hideLoading();
+  }).catch(onError);
+}
+
+function handleCustosFile(file){
+  if (!file) return;
+  showLoading('Lendo base de custos...');
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+      if (rows.length<2){ hideLoading(); return; }
+      var rawHeaders = rows[0].map(function(h){ return normText(h); });
+      var idx = {
+        idEscola: rawHeaders.findIndex(function(h){ return h.indexOf('escola')>=0; }),
+        colecao: rawHeaders.findIndex(function(h){ return h.indexOf('colecao')>=0; }),
+        volume: rawHeaders.findIndex(function(h){ return h.indexOf('volume')>=0; }),
+        sku: rawHeaders.findIndex(function(h){ return h.indexOf('sku')>=0 || h.indexOf('codigo')>=0 || h.indexOf('material')>=0; }),
+        preco: rawHeaders.findIndex(function(h){ return h.indexOf('custo')>=0 || h.indexOf('preco')>=0 || h.indexOf('valor')>=0; }),
+      };
+      var naoReconhecidas = rows[0].filter(function(h,i){ return h && Object.keys(idx).every(function(k){ return idx[k]!==i; }); });
+      var avisoEl = document.getElementById('custosImportWarn');
+      if (avisoEl) avisoEl.innerHTML = naoReconhecidas.length ? '<div class="warn">Colunas não reconhecidas (ignoradas): '+naoReconhecidas.join(', ')+'</div>' : '';
+
+      var payload = [];
+      for (var i=1;i<rows.length;i++){
+        var r = rows[i];
+        if (!r || r.every(function(c){return c==='' || c==null;})) continue;
+        var idEscola = idx.idEscola>=0 ? String(r[idx.idEscola]||'').trim() : '';
+        var colecao = idx.colecao>=0 ? String(r[idx.colecao]||'').trim() : '';
+        var sku = idx.sku>=0 ? String(r[idx.sku]||'').trim() : '';
+        if (!idEscola || !colecao || !sku) continue;
+        payload.push({
+          idEscola: idEscola, colecao: colecao,
+          volume: idx.volume>=0 ? String(r[idx.volume]||'').trim() : '',
+          sku: sku, preco: idx.preco>=0 ? (Number(r[idx.preco])||0) : 0,
+        });
+      }
+      db.doc('conciliador_reference/custos').set({lista: payload}).then(function(){
+        document.getElementById('custosFile').value=''; hideLoading();
+        if (payload.length===0) alert('Nenhuma linha válida encontrada. Confira se as colunas ID Escola, Coleção e SKU estão preenchidas.');
+      }).catch(onError);
+    } catch(err){ onError(err); }
+  };
+  reader.onerror = function(){ hideLoading(); alert('Não consegui ler o arquivo.'); };
+  reader.readAsArrayBuffer(file);
+}
+
+// =====================================================================
+// 7c) De-para de Faturamento (traduz o natOp da NF para o termo usado em Pedidos)
+// =====================================================================
+function renderFaturamento(){
+  var el = document.getElementById('faturamentoTable');
+  var busca = normText(document.getElementById('busca_faturamento') ? document.getElementById('busca_faturamento').value : '');
+  var filtrados = STATE.faturamento.filter(function(f){
+    return !busca || normText(f.tipoNF).indexOf(busca)>=0 || normText(f.tipoPedido).indexOf(busca)>=0;
+  });
+  if (filtrados.length===0){ el.innerHTML = '<div class="empty">'+(STATE.faturamento.length===0?'Nenhum de-para de faturamento cadastrado ainda.':'Nenhum resultado encontrado para essa busca.')+'</div>'; return; }
+  var rows = filtrados.map(function(f){
+    return '<tr><td>'+f.tipoNF+'</td><td>'+f.tipoPedido+'</td></tr>';
+  }).join('');
+  el.innerHTML = '<table><thead><tr><th>Tipo de faturamento na NF</th><th>Tipo de faturamento em Pedidos</th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+
+function addFaturamentoManual(){
+  var tipoNF = document.getElementById('f_tipoNF').value;
+  var tipoPedido = document.getElementById('f_tipoPedido').value;
+  if (!tipoNF || !tipoPedido) return;
+  var novaLista = STATE.faturamento.filter(function(f){ return normText(f.tipoNF)!==normText(tipoNF); });
+  novaLista.push({ tipoNF: tipoNF, tipoPedido: capitalizarPrimeira(tipoPedido) });
+  showLoading('Salvando...');
+  db.doc('conciliador_reference/faturamento').set({lista: novaLista}).then(function(){
+    document.getElementById('f_tipoNF').value=''; document.getElementById('f_tipoPedido').value=''; hideLoading();
+  }).catch(onError);
+}
+
+function handleFaturamentoFile(file){
+  if (!file) return;
+  showLoading('Lendo base de de-para de faturamento...');
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+      if (rows.length<2){ hideLoading(); return; }
+      var rawHeaders = rows[0].map(function(h){ return normText(h); });
+      var idx = {
+        tipoNF: rawHeaders.findIndex(function(h){ return h.indexOf('faturamento')>=0 && (h.indexOf(' nf')>=0 || h.indexOf('xml')>=0 || h==='faturamento nf' || h.indexOf('natop')>=0); }),
+        tipoPedido: rawHeaders.findIndex(function(h){ return h.indexOf('faturamento')>=0 && h.indexOf('pedido')>=0; }),
+      };
+      // fallback: se só houver 2 colunas com "faturamento", assume a 1ª = NF e a 2ª = Pedidos
+      if (idx.tipoNF<0 || idx.tipoPedido<0){
+        var candidatas = [];
+        rawHeaders.forEach(function(h,i){ if (h.indexOf('faturamento')>=0) candidatas.push(i); });
+        if (candidatas.length>=2){ idx.tipoNF = candidatas[0]; idx.tipoPedido = candidatas[1]; }
+      }
+      var naoReconhecidas = rows[0].filter(function(h,i){ return h && idx.tipoNF!==i && idx.tipoPedido!==i; });
+      var avisoEl = document.getElementById('faturamentoImportWarn');
+      if (avisoEl) avisoEl.innerHTML = naoReconhecidas.length ? '<div class="warn">Colunas não reconhecidas (ignoradas): '+naoReconhecidas.join(', ')+'</div>' : '';
+
+      var payload = [];
+      for (var i=1;i<rows.length;i++){
+        var r = rows[i];
+        if (!r || r.every(function(c){return c==='' || c==null;})) continue;
+        var tipoNF = idx.tipoNF>=0 ? String(r[idx.tipoNF]||'').trim() : '';
+        var tipoPedido = idx.tipoPedido>=0 ? String(r[idx.tipoPedido]||'').trim() : '';
+        if (!tipoNF || !tipoPedido) continue;
+        payload.push({ tipoNF: tipoNF, tipoPedido: capitalizarPrimeira(tipoPedido) });
+      }
+      db.doc('conciliador_reference/faturamento').set({lista: payload}).then(function(){
+        document.getElementById('faturamentoFile').value=''; hideLoading();
+        if (payload.length===0) alert('Nenhuma linha válida encontrada. Confira se as duas colunas de faturamento estão preenchidas.');
+      }).catch(onError);
+    } catch(err){ onError(err); }
+  };
+  reader.onerror = function(){ hideLoading(); alert('Não consegui ler o arquivo.'); };
+  reader.readAsArrayBuffer(file);
+}
+
+// Traduz o natOp da NF (frase longa/legal) para o termo curto usado em Pedidos, via a base de-para acima.
+// Se não achar mapeamento, devolve o próprio natOp (mantém o comportamento antigo como fallback).
+function traduzirTipoFaturamento(natOp, faturamentoMap){
+  var row = (faturamentoMap||[]).filter(function(f){ return normText(f.tipoNF)===normText(natOp); })[0];
+  return row ? row.tipoPedido : natOp;
+}
+// =====================================================================
+// 7d) Conciliação de Pedidos (chave: ID Escola + SKU + Data do pedido)
+// =====================================================================
+// A "Data do pedido" é a data em que NÓS fizemos o pedido (informada por quem monta a
+// planilha) — não a data em que o fornecedor respondeu. Combinada com o SKU, isso torna a
+// busca exata (sem ambiguidade entre pedidos parecidos). A quantidade funciona como saldo:
+// se vier menor que o esperado para aquele SKU, guarda o que já foi coberto e aguarda outra
+// conciliação completar o restante (cobre tanto divisão por quantidade quanto pedidos-combo
+// com vários SKUs, como as coleções "pacote" que têm dezenas de materiais).
+
+function unidadeVetorPedido(p){
+  var linhas = STATE.depara.filter(function(d){
+    return normText(d.colecao)===normText(p.colecao) && String(d.volume).trim()===String(p.volume).trim();
+  });
+  var v = {};
+  linhas.forEach(function(d){ v[normText(d.sku)] = (v[normText(d.sku)]||0) + 1; });
+  return v;
+}
+
+function necessidadeRestante(p, sku){
+  var u = p._unidade[sku];
+  if (!u) return 0;
+  var necessarioTotal = u * (Number(p.quantidade)||0);
+  var jaCoberto = (p._cobertura[sku]||0);
+  return Math.max(0, necessarioTotal - jaCoberto);
+}
+
+function mesmaData(dataA, dataB){
+  var a = parseBRDate(dataA), b = parseBRDate(dataB);
+  if (!a || !b) return normText(dataA)===normText(dataB);
+  return a.getTime()===b.getTime();
+}
+
+function handleConcPedidosFile(file){
+  if (!file) return;
+  showLoading('Lendo planilha de conciliação...');
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+      if (rows.length<2){ hideLoading(); return; }
+      var rawHeaders = rows[0].map(function(h){ return normText(h); });
+      var idx = {
+        idEscola: rawHeaders.findIndex(function(h){ return h.indexOf('escola')>=0; }),
+        sku: rawHeaders.findIndex(function(h){ return h.indexOf('sku')>=0 || h.indexOf('codigo')>=0 || h.indexOf('material')>=0; }),
+        quantidade: rawHeaders.findIndex(function(h){ return h.indexOf('quant')>=0; }),
+        numeroPedido: rawHeaders.findIndex(function(h){ return h.indexOf('pedido')>=0 && h.indexOf('data')<0; }),
+        dataPedido: rawHeaders.findIndex(function(h){ return h.indexOf('data')>=0; }),
+      };
+      if (idx.idEscola<0 || idx.sku<0 || idx.numeroPedido<0 || idx.dataPedido<0){
+        hideLoading();
+        alert('Não encontrei as colunas mínimas (ID Escola, SKU, Nº do pedido, Data do pedido). Confira se está usando o modelo padrão.');
+        return;
+      }
+      var linhas = [];
+      for (var i=1;i<rows.length;i++){
+        var r = rows[i];
+        if (!r || r.every(function(c){return c==='' || c==null;})) continue;
+        var idEscola = String(r[idx.idEscola]||'').trim();
+        var sku = String(r[idx.sku]||'').trim();
+        var numeroPedido = String(r[idx.numeroPedido]||'').trim();
+        var dataPedido = excelValueToDateStr(r[idx.dataPedido]);
+        if (!idEscola || !sku || !numeroPedido || !dataPedido) continue;
+        linhas.push({
+          idEscola: idEscola, sku: sku,
+          quantidade: idx.quantidade>=0 ? (Number(r[idx.quantidade])||0) : 0,
+          numeroPedido: numeroPedido, dataPedido: dataPedido,
+        });
+      }
+      if (linhas.length===0){ hideLoading(); alert('Nenhuma linha válida encontrada na planilha.'); return; }
+      conciliarPedidosFornecedor(linhas);
+      document.getElementById('concPedidosFile').value='';
+    } catch(err){ onError(err); }
+  };
+  reader.onerror = function(){ hideLoading(); alert('Não consegui ler o arquivo.'); };
+  reader.readAsArrayBuffer(file);
+}
+
+function conciliarPedidosFornecedor(linhas){
+  showLoading('Buscando pedidos das escolas envolvidas...');
+  var escolasEnvolvidas = Array.from(new Set(linhas.map(function(l){ return l.idEscola; })));
+  var promises = escolasEnvolvidas.map(function(idEscola){
+    return db.collection('conciliador_pedidos').where('idEscola','==',idEscola).get();
+  });
+  Promise.all(promises).then(function(snaps){
+    var nossos = [];
+    snaps.forEach(function(snap){ snap.docs.forEach(function(d){ nossos.push(Object.assign({id:d.id}, d.data())); }); });
+    nossos = nossos.filter(function(p){ return p.status!=='concluido'; })
+      .map(function(p){ return Object.assign({}, p, { _unidade: unidadeVetorPedido(p), _cobertura: Object.assign({}, p.coberturaSku||{}) }); })
+      .filter(function(p){ return Object.keys(p._unidade).length>0; });
+
+    var acoesPorPedido = {}; // pedidoId -> { pedido, numeros:[], resumos:[] }
+    var pendencias = [];
+
+    function registrar(pedido, numero, sku, qtd){
+      if (!acoesPorPedido[pedido.id]) acoesPorPedido[pedido.id] = { pedido: pedido, numeros: [], resumos: [] };
+      if (acoesPorPedido[pedido.id].numeros.indexOf(numero)===-1) acoesPorPedido[pedido.id].numeros.push(numero);
+      pedido._cobertura[sku] = (pedido._cobertura[sku]||0) + qtd;
+    }
+
+    linhas.forEach(function(linha){
+      // chave exata: ID Escola + SKU + Data do pedido
+      var candidatos = nossos.filter(function(p){
+        return normText(p.idEscola)===normText(linha.idEscola)
+          && p._unidade[normText(linha.sku)]!==undefined
+          && mesmaData(p.dataPedido, linha.dataPedido);
+      });
+      if (candidatos.length===0){
+        pendencias.push({ linha:linha, motivo:'Nenhum pedido encontrado com essa combinação de Escola + SKU + Data do pedido.' });
+        return;
+      }
+      var sku = normText(linha.sku);
+      var saldoTotal = candidatos.reduce(function(acc,p){ return acc + necessidadeRestante(p, sku); }, 0);
+      if (linha.quantidade > saldoTotal + 0.0001){
+        pendencias.push({ linha:linha, motivo:'A quantidade informada ('+linha.quantidade+') é MAIOR que o saldo em aberto desse SKU nesse pedido ('+saldoTotal+'). Confira a Data do pedido ou se há pedido duplicado não cadastrado.' });
+        return;
+      }
+      // prioridade: um único pedido cuja necessidade restante bate exatamente
+      var exato = candidatos.filter(function(p){ return Math.abs(necessidadeRestante(p, sku) - linha.quantidade) < 0.0001; })[0];
+      var alvo = exato ? [exato] : candidatos.slice().sort(function(a,b){ return ordemDoPedido(a)-ordemDoPedido(b); });
+      var restante = linha.quantidade;
+      alvo.forEach(function(p){
+        if (restante<=0.0001) return;
+        var disp = necessidadeRestante(p, sku);
+        if (disp<=0.0001) return;
+        var usar = Math.min(disp, restante);
+        registrar(p, linha.numeroPedido, sku, usar);
+        restante -= usar;
+        var completo = Object.keys(p._unidade).every(function(s){ return necessidadeRestante(p, s)<=0.0001; });
+        acoesPorPedido[p.id].resumos.push(p.idEscola+' | '+p.colecao+' v'+p.volume+' | SKU '+linha.sku+' qtd '+usar+' → nº '+linha.numeroPedido+(completo?' (pedido totalmente vinculado)':' (parcial — ainda faltam SKUs/quantidades)'));
+      });
+    });
+
+    executarAcoesConciliacao(acoesPorPedido, pendencias);
+  }).catch(onError);
+}
+
+function executarAcoesConciliacao(acoesPorPedido, pendencias){
+  var pedidoIds = Object.keys(acoesPorPedido);
+  var resumosParaExibir = [];
+  pedidoIds.forEach(function(id){ resumosParaExibir = resumosParaExibir.concat(acoesPorPedido[id].resumos); });
+
+  if (pedidoIds.length===0){
+    hideLoading();
+    renderResultadoConciliacao([], pendencias);
+    return;
+  }
+  showLoading('Aplicando vínculos ('+pedidoIds.length+' pedido(s))...');
+  var batch = db.batch();
+  pedidoIds.forEach(function(id){
+    var a = acoesPorPedido[id];
+    var atuais = numerosParaArray(a.pedido.numeroPedidoFornecedor);
+    var novos = atuais.concat(a.numeros).filter(function(v,i,arr){ return arr.indexOf(v)===i; });
+    batch.update(db.collection('conciliador_pedidos').doc(id), {
+      numeroPedidoFornecedor: novos.join(', '),
+      numerosPedidoArray: novos,
+      coberturaSku: a.pedido._cobertura,
+    });
+  });
+  batch.commit().then(function(){
+    hideLoading();
+    renderResultadoConciliacao(resumosParaExibir, pendencias);
+    renderPedidos(); refreshSummary();
+  }).catch(onError);
+}
+
+function numerosParaArray(str){
+  return (str||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+}
+
+
+function renderResultadoConciliacao(resumos, pendencias){
+  var el = document.getElementById('concPedidosResultado');
+  var html = '';
+  html += '<div class="row"><span class="pill conciliada">'+resumos.length+' vínculo(s) aplicado(s)</span>';
+  html += '<span class="pill '+(pendencias.length>0?'pendente':'conciliada')+'">'+pendencias.length+' pendência(s)</span></div>';
+  if (resumos.length>0){
+    html += '<h3 style="font-size:14px;margin:14px 0 6px">Vínculos aplicados</h3>';
+    html += resumos.map(function(r){ return '<div class="detail" style="margin-top:4px">'+r+'</div>'; }).join('');
+  }
+  if (pendencias.length>0){
+    html += '<h3 style="font-size:14px;margin:14px 0 6px">Pendências (revisar manualmente)</h3>';
+    html += pendencias.map(function(pd){
+      var l = pd.linha;
+      return '<div class="detail" style="margin-top:4px"><strong>'+l.idEscola+' | '+l.colecao+' v'+l.volume+' | qtd '+l.quantidade+' | nº '+l.numeroPedido+' | data pedido '+l.dataPedido+'</strong><br>'+pd.motivo+'</div>';
+    }).join('');
+  }
+  el.innerHTML = html;
+}
+
+function limparResultadoConciliacao(){
+  document.getElementById('concPedidosResultado').innerHTML = '<div class="empty">Nenhuma conciliação processada ainda nesta sessão.</div>';
+  document.getElementById('concPedidosWarn').innerHTML = '';
+}
+
+// =====================================================================
+// 8) Parsing de XML da NF-e (via DOMParser do navegador)
+// =====================================================================
+function parseNFeXML(xmlText){
+  var doc = new DOMParser().parseFromString(xmlText, "text/xml");
+  if (doc.getElementsByTagName("parsererror").length) throw new Error("XML inválido ou corrompido.");
+  var infNFe = doc.getElementsByTagName("infNFe")[0];
+  if (!infNFe) throw new Error("Não encontrei a tag infNFe — confira se é um XML de NF-e válido.");
+  var getTag = function(parent, tag){ if(!parent) return ''; var el = parent.getElementsByTagName(tag)[0]; return el ? el.textContent.trim() : ''; };
+  var ide = infNFe.getElementsByTagName("ide")[0];
+  var emit = infNFe.getElementsByTagName("emit")[0];
+  var dest = infNFe.getElementsByTagName("dest")[0];
+  var total = infNFe.getElementsByTagName("total")[0];
+  var infAdic = infNFe.getElementsByTagName("infAdic")[0];
+  var detEls = infNFe.getElementsByTagName("det");
+  var chave = (infNFe.getAttribute("Id")||"").replace(/^NFe/,"");
+  var itens = [];
+  for (var i=0;i<detEls.length;i++){
+    var prod = detEls[i].getElementsByTagName("prod")[0];
+    if (!prod) continue;
+    itens.push({ sku:getTag(prod,"cProd"), descricao:getTag(prod,"xProd"), quantidade:parseFloat(getTag(prod,"qCom")||"0"), valor:parseFloat(getTag(prod,"vProd")||"0") });
+  }
+  var infCplTexto = getTag(infAdic,"infCpl");
+  return {
+    chave: chave, numeroNF: getTag(ide,"nNF"), natOp: getTag(ide,"natOp"),
+    cnpjEmit: getTag(emit,"CNPJ"), nomeEmit: getTag(emit,"xNome"),
+    cnpjDest: getTag(dest,"CNPJ") || getTag(dest,"CPF"), nomeDest: getTag(dest,"xNome"),
+    vNF: parseFloat(getTag(total,"vNF")||"0"), infCpl: infCplTexto, itens: itens,
+    numerosPedido: extrairNumerosPedido(infCplTexto),
+  };
+}
+
+// Procura por algo como "Pedido(s): 7696188 - ..." no texto de informações complementares da NF
+// e devolve os números encontrados (só sequências com 4+ dígitos, pra não pegar quantidades soltas tipo "60").
+function extrairNumerosPedido(infCpl){
+  if (!infCpl) return [];
+  var match = infCpl.match(/pedido\(?s?\)?\s*:?\s*([\d\s\-\|,]+)/i);
+  if (!match) return [];
+  var numeros = match[1].match(/\d{4,}/g);
+  return numeros || [];
+}
+
+// =====================================================================
+// 9) Motor de matching (mesma lógica usada na versão Apps Script)
+// =====================================================================
+function getCustoForPedidoSku(pedido, sku, custos){
+  var row = custos.filter(function(c){
+    return normText(c.idEscola)===normText(pedido.idEscola)
+      && normText(c.colecao)===normText(pedido.colecao)
+      && String(c.volume).trim()===String(pedido.volume).trim()
+      && normText(c.sku)===normText(sku);
+  })[0];
+  return row ? row.preco : 0;
+}
+
+function buildExpectedForPedido(pedido, depara, custos){
+  var rows = depara.filter(function(d){
+    return normText(d.colecao)===normText(pedido.colecao)
+      && String(d.volume).trim()===String(pedido.volume).trim();
+  });
+  var map = {};
+  rows.forEach(function(d){
+    var qty = (pedido.quantidade||0);
+    if (!map[d.sku]) map[d.sku] = { qtyTotal:0, preco: getCustoForPedidoSku(pedido, d.sku, custos), descricao:d.sku };
+    map[d.sku].qtyTotal += qty;
+  });
+  return map;
+}
+function getRemaining(pedido, depara, custos){
+  var expected = buildExpectedForPedido(pedido, depara, custos);
+  var recebido = pedido.recebido || {};
+  var remaining = {};
+  Object.keys(expected).forEach(function(sku){
+    var rem = expected[sku].qtyTotal - (recebido[sku]||0);
+    if (rem > 0.0001) remaining[sku] = { qty:rem, preco:expected[sku].preco, descricao:expected[sku].descricao };
+  });
+  return remaining;
+}
+// Ordem para decidir qual pedido "consumir" primeiro: prioriza a Data do pedido real
+// (a mais antiga primeiro); se não der pra interpretar essa data, usa a data de upload como último recurso.
+function ordemDoPedido(p){
+  var d = parseBRDate(p.dataPedido);
+  if (d) return d.getTime();
+  return new Date(p.criadoEm||0).getTime();
+}
+
+function matchNF(nf, candidatesInput, depara, custos, faturamentoMap){
+  var candidates = candidatesInput.slice().sort(function(a,b){ return ordemDoPedido(a) - ordemDoPedido(b); });
+  if (candidates.length===0){
+    return { status:'pendente', motivo:'Nenhum pedido em aberto encontrado para o CNPJ desta escola. Vincule manualmente.', pedidosAfetados:{}, custoEsperado:0 };
+  }
+  var remainingByPedido = {};
+  candidates.forEach(function(p){ remainingByPedido[p.id] = getRemaining(p, depara, custos); });
+  var pool = {};
+  candidates.forEach(function(p){ Object.keys(remainingByPedido[p.id]).forEach(function(sku){ pool[sku]=(pool[sku]||0)+remainingByPedido[p.id][sku].qty; }); });
+  var naoEncontrados = [];
+  nf.itens.forEach(function(item){ var disp=pool[item.sku]||0; if (disp+0.0001<item.quantidade) naoEncontrados.push(item.sku); });
+  if (naoEncontrados.length>0){
+    return { status:'erro', motivo:'Item(ns) da NF não batem com pedidos abertos desta escola (falta cobertura ou de-para ausente): '+naoEncontrados.join(', '), pedidosAfetados:{}, custoEsperado:0 };
+  }
+  var alocacoes = {};
+  nf.itens.forEach(function(item){
+    var restante = item.quantidade;
+    // 1) Prioridade: existe um único pedido com sobra EXATAMENTE igual à quantidade da NF?
+    //    Isso preserva o vínculo com o pedido "certo" quando ele existe, em vez de sempre consumir o mais antigo.
+    var candidatoExato = candidates.filter(function(p){
+      var rem = remainingByPedido[p.id][item.sku];
+      return rem && Math.abs(rem.qty - item.quantidade) < 0.0001;
+    })[0];
+    if (candidatoExato){
+      alocacoes[candidatoExato.id] = alocacoes[candidatoExato.id] || {};
+      alocacoes[candidatoExato.id][item.sku] = (alocacoes[candidatoExato.id][item.sku]||0) + item.quantidade;
+      remainingByPedido[candidatoExato.id][item.sku].qty = 0;
+      restante = 0;
+    }
+    // 2) Sem match exato: cai no consumo do pedido mais antigo primeiro (FIFO), podendo dividir entre vários
+    for (var i=0;i<candidates.length;i++){
+      if (restante<=0.0001) break;
+      var p = candidates[i];
+      var rem = remainingByPedido[p.id][item.sku];
+      if (!rem || rem.qty<=0) continue;
+      var usar = Math.min(rem.qty, restante);
+      alocacoes[p.id] = alocacoes[p.id] || {};
+      alocacoes[p.id][item.sku] = (alocacoes[p.id][item.sku]||0) + usar;
+      rem.qty -= usar; restante -= usar;
+    }
+  });
+  var custoEsperado = 0;
+  var detalheCusto = [];
+  Object.keys(alocacoes).forEach(function(pedidoId){
+    var pedido = candidates.filter(function(p){ return String(p.id)===String(pedidoId); })[0];
+    if (!pedido) return;
+    Object.keys(alocacoes[pedidoId]).forEach(function(sku){
+      var qtd = alocacoes[pedidoId][sku];
+      var preco = getCustoForPedidoSku(pedido, sku, custos);
+      var subtotal = qtd * preco;
+      custoEsperado += subtotal;
+      detalheCusto.push({ sku: sku, colecao: pedido.colecao, volume: pedido.volume, quantidade: qtd, preco: preco, subtotal: subtotal });
+    });
+  });
+  var pedidosEnvolvidos = Object.keys(alocacoes);
+  var desvio = Math.abs(custoEsperado - nf.vNF);
+  var tolerancia = 10;
+  var tipoTraduzido = traduzirTipoFaturamento(nf.natOp, faturamentoMap);
+  var tipoBate = candidates.some(function(p){ return pedidosEnvolvidos.indexOf(String(p.id))!==-1 && normText(p.tipoFaturamento)===normText(tipoTraduzido); });
+  if (!tipoBate){
+    var temMapeamento = (faturamentoMap||[]).some(function(f){ return normText(f.tipoNF)===normText(nf.natOp); });
+    var dica = temMapeamento ? '' : ' Não há de-para cadastrado para esse texto — confira a aba "De-para Faturamento".';
+    return { status:'erro', motivo:'Tipo de faturamento da NF ("'+nf.natOp+'" → "'+tipoTraduzido+'") não confere com o(s) pedido(s) vinculado(s).'+dica, pedidosAfetados:alocacoes, custoEsperado:custoEsperado, detalheCusto:detalheCusto };
+  }
+  if (desvio > tolerancia){
+    return { status:'erro', motivo:'Custo divergente: esperado '+fmtMoney(custoEsperado)+', NF veio com '+fmtMoney(nf.vNF)+' (diferença de '+fmtMoney(desvio)+').', pedidosAfetados:alocacoes, custoEsperado:custoEsperado, detalheCusto:detalheCusto };
+  }
+  return { status:'conciliada', motivo:'', pedidosAfetados:alocacoes, custoEsperado:custoEsperado, detalheCusto:detalheCusto };
+}
+
+function applyAllocationsToPedidos(alocacoes, candidatos, depara, custos, numeroNFNova){
+  var pedidoIds = Object.keys(alocacoes || {});
+  if (pedidoIds.length===0) return Promise.resolve();
+  var batch = db.batch();
+  var diff = { abertos:0, parciais:0, concluidos:0 };
+  var campoPorStatus = { aberto:'abertos', parcial:'parciais', concluido:'concluidos' };
+  pedidoIds.forEach(function(pedidoId){
+    var pedido = candidatos.filter(function(p){ return String(p.id)===String(pedidoId); })[0];
+    if (!pedido) return;
+    var recebido = Object.assign({}, pedido.recebido||{});
+    Object.keys(alocacoes[pedidoId]).forEach(function(sku){ recebido[sku] = (recebido[sku]||0) + alocacoes[pedidoId][sku]; });
+    var expected = buildExpectedForPedido(pedido, depara, custos);
+    var totalRestante = Object.keys(expected).reduce(function(acc, sku){ return acc + Math.max(0, expected[sku].qtyTotal - (recebido[sku]||0)); }, 0);
+    var novoStatus = totalRestante<=0.0001 ? 'concluido' : 'parcial';
+    var nfsExistentes = (pedido.numeroNF||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
+    if (numeroNFNova && nfsExistentes.indexOf(numeroNFNova)===-1) nfsExistentes.push(numeroNFNova);
+    if (novoStatus !== pedido.status){
+      diff[campoPorStatus[pedido.status] || 'abertos'] -= 1;
+      diff[campoPorStatus[novoStatus]] += 1;
+    }
+    batch.update(db.collection('conciliador_pedidos').doc(pedidoId), { recebido: recebido, status: novoStatus, numeroNF: nfsExistentes.join(', ') });
+  });
+  var incremento = {};
+  Object.keys(diff).forEach(function(k){ if (diff[k]!==0) incremento[k] = firebase.firestore.FieldValue.increment(diff[k]); });
+  if (Object.keys(incremento).length>0){
+    batch.set(db.doc('conciliador_reference/stats'), incremento, {merge:true});
+  }
+  return batch.commit();
+}
+
+// =====================================================================
+// 10) Processar NFs
+// =====================================================================
+function getIdsEscolaPorCNPJ(cnpj){
+  var alvo = onlyDigits(cnpj);
+  return STATE.escolas.filter(function(e){ return onlyDigits(e.cnpj)===alvo && alvo; }).map(function(e){ return e.idEscola; });
+}
+
+function buscarCandidatosPorEscolas(idsEscola){
+  if (idsEscola.length===0) return Promise.resolve([]);
+  var promises = idsEscola.map(function(idEscola){
+    return db.collection('conciliador_pedidos').where('idEscola','==',idEscola).get();
+  });
+  return Promise.all(promises).then(function(snaps){
+    var todos = [];
+    snaps.forEach(function(snap){
+      snap.docs.forEach(function(d){ todos.push(Object.assign({id:d.id}, d.data())); });
+    });
+    return todos.filter(function(p){ return p.status!=='concluido'; });
+  });
+}
+
+// Busca pedidos pelo "Nº do pedido" preenchido manualmente — método principal de vínculo agora,
+// já que evita ambiguidade entre vários pedidos parecidos da mesma escola/coleção/volume.
+function buscarCandidatosPorNumeroPedido(numeros){
+  if (!numeros || numeros.length===0) return Promise.resolve([]);
+  var promises = numeros.map(function(n){
+    return db.collection('conciliador_pedidos').where('numerosPedidoArray','array-contains', n).get();
+  });
+  // fallback: também busca por igualdade exata no campo texto, para linhas salvas antes dessa versão
+  var promisesLegado = numeros.map(function(n){
+    return db.collection('conciliador_pedidos').where('numeroPedidoFornecedor','==', n).get();
+  });
+  return Promise.all(promises.concat(promisesLegado)).then(function(snaps){
+    var todos = []; var vistos = {};
+    snaps.forEach(function(snap){
+      snap.docs.forEach(function(d){
+        if (vistos[d.id]) return;
+        vistos[d.id] = true;
+        todos.push(Object.assign({id:d.id}, d.data()));
+      });
+    });
+    return todos.filter(function(p){ return p.status!=='concluido'; });
+  });
+}
+
+function handleNFFiles(fileList){
+  var files = Array.prototype.slice.call(fileList);
+  var box = document.getElementById('nfFilebox');
+  box.textContent = 'Processando XML(s)...';
+  box.parentElement.classList.add('loading');
+  processNext(files, 0);
+}
+function processNext(files, i){
+  if (i>=files.length){
+    var box = document.getElementById('nfFilebox');
+    box.textContent = 'Clique para selecionar o(s) XML(s) da NF-e (pode selecionar vários de uma vez)';
+    box.parentElement.classList.remove('loading');
+    document.getElementById('nfFile').value='';
+    renderPedidos(); refreshSummary();
+    return;
+  }
+  var reader = new FileReader();
+  reader.onload = function(e){
+    var record = { arquivo: files[i].name, processadoEm: new Date().toISOString() };
+    try{
+      var nf = parseNFeXML(e.target.result);
+      var numeros = nf.numerosPedido || [];
+
+      function finalizarComCandidatos(candidates){
+        var result = matchNF(nf, candidates, STATE.depara, STATE.custos, STATE.faturamento);
+        Object.assign(record, {
+          chave: nf.chave, numeroNF: nf.numeroNF, cnpjDest: nf.cnpjDest, nomeDest: nf.nomeDest,
+          cnpjEmit: nf.cnpjEmit, nomeEmit: nf.nomeEmit, natOp: nf.natOp, vNF: nf.vNF, infCpl: nf.infCpl,
+          itens: nf.itens, status: result.status, motivo: result.motivo,
+          pedidosAfetados: result.pedidosAfetados, custoEsperado: result.custoEsperado,
+          detalheCusto: result.detalheCusto || [],
+        });
+        var afterMatch = result.status==='conciliada' ? applyAllocationsToPedidos(result.pedidosAfetados, candidates, STATE.depara, STATE.custos, nf.numeroNF) : Promise.resolve();
+        return afterMatch.then(function(){ return db.collection('conciliador_nfs').add(record); });
+      }
+
+      if (numeros.length>0){
+        buscarCandidatosPorNumeroPedido(numeros).then(function(candidatosPorNumero){
+          if (candidatosPorNumero.length>0) return finalizarComCandidatos(candidatosPorNumero);
+          Object.assign(record, {
+            chave: nf.chave, numeroNF: nf.numeroNF, cnpjDest: nf.cnpjDest, nomeDest: nf.nomeDest,
+            cnpjEmit: nf.cnpjEmit, nomeEmit: nf.nomeEmit, natOp: nf.natOp, vNF: nf.vNF, infCpl: nf.infCpl,
+            itens: nf.itens, status: 'pendente',
+            motivo: 'A NF traz o(s) número(s) de pedido '+numeros.join(', ')+', mas nenhum pedido cadastrado tem esse "Nº do pedido" preenchido ainda. Preencha esse campo na aba Pedidos e reprocesse esta NF.',
+            pedidosAfetados: {}, custoEsperado: 0, detalheCusto: [],
+          });
+          return db.collection('conciliador_nfs').add(record);
+        }).then(function(){ processNext(files, i+1); }).catch(onError);
+      } else {
+        var idsEscola = getIdsEscolaPorCNPJ(nf.cnpjDest);
+        buscarCandidatosPorEscolas(idsEscola).then(function(candidates){
+          return finalizarComCandidatos(candidates);
+        }).then(function(){ processNext(files, i+1); }).catch(onError);
+      }
+    } catch(err){
+      record.status = 'erro'; record.motivo = 'Falha ao ler o XML: ' + err.message;
+      record.itens = []; record.pedidosAfetados = {}; record.vNF = 0; record.custoEsperado = 0;
+      db.collection('conciliador_nfs').add(record).then(function(){ processNext(files, i+1); }).catch(onError);
+    }
+  };
+  reader.readAsText(files[i]);
+}
+
+var vincCandidatosCache = {};
+
+function renderNFs(){
+  var el = document.getElementById('nfsList');
+  if (STATE.nfs.length===0){ el.innerHTML = '<div class="empty">Nenhuma NF processada ainda.</div>'; return; }
+  var opcoesEscola = STATE.escolas.slice().sort(function(a,b){ return normText(a.idEscola).localeCompare(normText(b.idEscola)); })
+    .map(function(e){ return '<option value="'+e.idEscola+'">'+e.idEscola+'</option>'; }).join('');
+  el.innerHTML = STATE.nfs.map(function(n){
+    var statusLabel = n.status==='conciliada'?'Conciliada':n.status==='pendente'?'Pendente':'Erro';
+    var html = '<div class="nfitem"><div class="row" style="margin-bottom:0;align-items:center"><span class="pill '+n.status+'">'+statusLabel+'</span><strong>'+n.arquivo+'</strong>';
+    if (n.numeroNF) html += '<span class="hint">NF nº '+n.numeroNF+'</span>';
+    if (n.vNF) html += '<span class="hint">'+fmtMoney(n.vNF)+'</span>';
+    if (n.nomeDest) html += '<span class="hint">Escola: '+n.nomeDest+'</span>';
+    if (n.cnpjDest) html += '<span class="hint">CNPJ '+n.cnpjDest+'</span>';
+    html += '<button class="btn danger" style="margin-left:auto" onclick="removeNF(\''+n.id+'\')">Remover</button>';
+    html += '</div>';
+    if (n.motivo) html += '<div class="detail">'+n.motivo+'</div>';
+    if (n.detalheCusto && n.detalheCusto.length>0){
+      var linhasDetalhe = n.detalheCusto.map(function(d){
+        return '<tr><td>'+d.sku+'</td><td>'+d.colecao+'</td><td>'+d.volume+'</td><td>'+d.quantidade+'</td><td>'+fmtMoney(d.preco)+'</td><td>'+fmtMoney(d.subtotal)+'</td></tr>';
+      }).join('');
+      var totalCalculado = n.detalheCusto.reduce(function(acc,d){ return acc+(d.subtotal||0); }, 0);
+      html += '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:var(--text-muted)">Ver detalhamento do custo ('+fmtMoney(totalCalculado)+')</summary>'+
+        '<div style="overflow-x:auto;margin-top:6px"><table><thead><tr><th>SKU</th><th>Coleção</th><th>Volume</th><th>Qtd. alocada</th><th>Preço unit. usado</th><th>Subtotal</th></tr></thead><tbody>'+linhasDetalhe+
+        '<tr><td colspan="5" style="text-align:right;font-weight:600">Total calculado:</td><td style="font-weight:600">'+fmtMoney(totalCalculado)+'</td></tr>'+
+        '</tbody></table></div></details>';
+    }
+    if (n.status==='pendente'){
+      html += '<div class="row" style="margin-top:8px">'+
+        '<div class="field"><label>Escola</label><select id="vinc_escola_'+n.id+'" onchange="carregarPedidosParaVinculo(\''+n.id+'\')"><option value="">Selecionar escola</option>'+opcoesEscola+'</select></div>'+
+        '<div class="field"><label>Pedido</label><select id="vinc_pedido_'+n.id+'" onchange="vincularManual(\''+n.id+'\', this.value)"><option value="">Selecione a escola primeiro</option></select></div>'+
+      '</div>';
+    }
+    html += '</div>';
+    return html;
+  }).join('');
+}
+
+// Desfaz o efeito de uma NF já conciliada nos pedidos afetados (usado antes de excluir a NF)
+function revertAllocations(pedidosAfetados, depara, numeroNF){
+  var pedidoIds = Object.keys(pedidosAfetados || {});
+  if (pedidoIds.length===0) return Promise.resolve();
+  var refs = pedidoIds.map(function(id){ return db.collection('conciliador_pedidos').doc(id); });
+  return Promise.all(refs.map(function(ref){ return ref.get(); })).then(function(docs){
+    var batch = db.batch();
+    var diff = { abertos:0, parciais:0, concluidos:0 };
+    var campoPorStatus = { aberto:'abertos', parcial:'parciais', concluido:'concluidos' };
+    docs.forEach(function(doc){
+      if (!doc.exists) return;
+      var pedido = Object.assign({id:doc.id}, doc.data());
+      var recebido = Object.assign({}, pedido.recebido||{});
+      Object.keys(pedidosAfetados[doc.id]).forEach(function(sku){
+        recebido[sku] = Math.max(0, (recebido[sku]||0) - pedidosAfetados[doc.id][sku]);
+        if (recebido[sku]===0) delete recebido[sku];
+      });
+      var expected = buildExpectedForPedido(pedido, depara, []);
+      var totalRestante = Object.keys(expected).reduce(function(acc, sku){ return acc + Math.max(0, expected[sku].qtyTotal - (recebido[sku]||0)); }, 0);
+      var totalRecebidoAgora = Object.keys(recebido).reduce(function(acc, sku){ return acc + recebido[sku]; }, 0);
+      var novoStatus = totalRecebidoAgora<=0 ? 'aberto' : (totalRestante<=0.0001 ? 'concluido' : 'parcial');
+      var nfsExistentes = (pedido.numeroNF||'').split(',').map(function(s){return s.trim();}).filter(Boolean).filter(function(n){ return n!==numeroNF; });
+      if (novoStatus !== pedido.status){
+        diff[campoPorStatus[pedido.status] || 'abertos'] -= 1;
+        diff[campoPorStatus[novoStatus]] += 1;
+      }
+      batch.update(db.collection('conciliador_pedidos').doc(doc.id), { recebido: recebido, status: novoStatus, numeroNF: nfsExistentes.join(', ') });
+    });
+    var incremento = {};
+    Object.keys(diff).forEach(function(k){ if (diff[k]!==0) incremento[k] = firebase.firestore.FieldValue.increment(diff[k]); });
+    if (Object.keys(incremento).length>0) batch.set(db.doc('conciliador_reference/stats'), incremento, {merge:true});
+    return batch.commit();
+  });
+}
+
+function removeNF(nfId){
+  var nf = STATE.nfs.filter(function(n){ return String(n.id)===String(nfId); })[0];
+  if (!nf) return;
+  var msg = nf.status==='conciliada'
+    ? 'Essa NF já foi conciliada e afetou pedidos. Remover vai DESFAZER esse vínculo (os pedidos envolvidos voltam ao status anterior). Confirma?'
+    : 'Remover essa NF do histórico? Essa ação não pode ser desfeita.';
+  if (!confirm(msg)) return;
+  showLoading('Removendo NF...');
+  var revert = nf.status==='conciliada' ? revertAllocations(nf.pedidosAfetados, STATE.depara, nf.numeroNF) : Promise.resolve();
+  revert.then(function(){
+    return db.collection('conciliador_nfs').doc(nfId).delete();
+  }).then(function(){
+    hideLoading(); renderPedidos(); refreshSummary();
+  }).catch(onError);
+}
+
+function carregarPedidosParaVinculo(nfId){
+  var idEscola = document.getElementById('vinc_escola_'+nfId).value;
+  var selectPedido = document.getElementById('vinc_pedido_'+nfId);
+  if (!idEscola){ selectPedido.innerHTML = '<option value="">Selecione a escola primeiro</option>'; return; }
+  selectPedido.innerHTML = '<option value="">Buscando pedidos...</option>';
+  db.collection('conciliador_pedidos').where('idEscola','==',idEscola).get().then(function(snap){
+    var pedidos = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); }).filter(function(p){ return p.status!=='concluido'; });
+    vincCandidatosCache[nfId] = pedidos;
+    if (pedidos.length===0){ selectPedido.innerHTML = '<option value="">Nenhum pedido em aberto para essa escola</option>'; return; }
+    selectPedido.innerHTML = '<option value="" disabled selected>Selecionar pedido</option>' + pedidos.map(function(p){
+      return '<option value="'+p.id+'">'+p.colecao+' (v.'+p.volume+') — qtd '+p.quantidade+'</option>';
+    }).join('');
+  }).catch(onError);
+}
+
+function vincularManual(nfId, pedidoId){
+  if (!pedidoId) return;
+  showLoading('Vinculando...');
+  var nfRow = STATE.nfs.filter(function(n){ return String(n.id)===String(nfId); })[0];
+  var pedido = (vincCandidatosCache[nfId]||[]).filter(function(p){ return String(p.id)===String(pedidoId); })[0];
+  if (!nfRow || !pedido){ hideLoading(); return; }
+  var nf = { natOp: nfRow.natOp, vNF: nfRow.vNF, itens: nfRow.itens, numeroNF: nfRow.numeroNF };
+  var result = matchNF(nf, [pedido], STATE.depara, STATE.custos, STATE.faturamento);
+  var afterMatch = result.status==='conciliada' ? applyAllocationsToPedidos(result.pedidosAfetados, [pedido], STATE.depara, STATE.custos, nf.numeroNF) : Promise.resolve();
+  afterMatch.then(function(){
+    return db.collection('conciliador_nfs').doc(nfId).update({
+      status: result.status, motivo: result.motivo, pedidosAfetados: result.pedidosAfetados,
+      custoEsperado: result.custoEsperado, detalheCusto: result.detalheCusto || [],
+      processadoEm: new Date().toISOString(),
+    });
+  }).then(function(){ hideLoading(); renderPedidos(); refreshSummary(); }).catch(onError);
+}
+</script>
+</body>
+</html>
