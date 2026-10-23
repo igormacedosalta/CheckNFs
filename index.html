@@ -105,6 +105,15 @@
   <input type="email" id="loginEmail" placeholder="E-mail">
   <input type="password" id="loginPassword" placeholder="Senha">
   <button class="btn" style="width:100%" onclick="doLogin()">Entrar</button>
+  <div id="firstAccessBox" style="display:none;margin-top:12px">
+    <input type="password" id="loginPassword2" placeholder="Repita a senha">
+    <button class="btn secondary" style="width:100%" onclick="doFirstAccess()">Criar minha senha e entrar</button>
+  </div>
+  <div style="text-align:center;margin-top:12px;font-size:12px">
+    <a href="#" style="color:var(--primary)" onclick="toggleFirstAccess();return false;">Primeiro acesso</a>
+    &nbsp;·&nbsp;
+    <a href="#" style="color:var(--primary)" onclick="doResetPassword();return false;">Esqueci minha senha</a>
+  </div>
 </div>
 
 <div class="modalOverlay" id="editPedidoModal">
@@ -345,14 +354,78 @@ function doLogin(){
     document.getElementById('loginError').textContent = 'Não consegui entrar: ' + err.message;
   });
 }
+var firstAccessEmEndamento = false;
+function toggleFirstAccess(){
+  var box = document.getElementById('firstAccessBox');
+  box.style.display = box.style.display==='none' ? 'block' : 'none';
+  document.getElementById('loginError').textContent = box.style.display==='block'
+    ? 'Primeiro acesso: digite seu e-mail, escolha uma senha (mín. 6 caracteres), repita e clique em "Criar minha senha e entrar".' : '';
+  document.getElementById('loginError').style.color = '';
+}
+// Primeiro acesso: a pessoa cria a própria senha. Só fica de pé se o e-mail já tiver sido
+// liberado na coleção pedidoinicial_equipe_pedidos; caso contrário a conta recém-criada é removida.
+function doFirstAccess(){
+  var email = document.getElementById('loginEmail').value.trim().toLowerCase();
+  var pass = document.getElementById('loginPassword').value;
+  var pass2 = document.getElementById('loginPassword2').value;
+  var el = document.getElementById('loginError');
+  el.style.color = '';
+  if (!email || !pass){ el.textContent = 'Preencha e-mail e senha.'; return; }
+  if (pass.length < 6){ el.textContent = 'A senha precisa ter pelo menos 6 caracteres.'; return; }
+  if (pass !== pass2){ el.textContent = 'As duas senhas não são iguais.'; return; }
+  showLoading('Criando acesso...');
+  firstAccessEmEndamento = true;
+  auth.createUserWithEmailAndPassword(email, pass).then(function(cred){
+    return db.doc('pedidoinicial_equipe_pedidos/'+email).get().then(function(doc){
+      if (doc.exists){
+        firstAccessEmEndamento = false;
+        hideLoading();
+        document.getElementById('firstAccessBox').style.display = 'none';
+        entrarNaApp(cred.user);
+      } else {
+        return cred.user.delete().then(function(){
+          firstAccessEmEndamento = false;
+          hideLoading();
+          el.textContent = 'Esse e-mail ainda não foi liberado. Peça para o administrador cadastrá-lo e tente de novo.';
+        });
+      }
+    });
+  }).catch(function(err){
+    firstAccessEmEndamento = false;
+    hideLoading();
+    if (err.code==='auth/email-already-in-use') el.textContent = 'Esse e-mail já tem senha cadastrada. Use "Entrar" ou "Esqueci minha senha".';
+    else el.textContent = 'Não consegui criar o acesso: ' + err.message;
+  });
+}
+
+function doResetPassword(){
+  var email = document.getElementById('loginEmail').value.trim();
+  var el = document.getElementById('loginError');
+  if (!email){ el.textContent = 'Digite seu e-mail no campo acima e clique de novo.'; return; }
+  showLoading('Enviando e-mail...');
+  auth.sendPasswordResetEmail(email).then(function(){
+    hideLoading();
+    el.style.color = 'var(--pill-green-text)';
+    el.textContent = 'Enviamos um e-mail com o link para definir a senha. Confira também o spam.';
+  }).catch(function(err){
+    hideLoading();
+    el.style.color = '';
+    el.textContent = 'Não consegui enviar: ' + err.message;
+  });
+}
 function doLogout(){ auth.signOut(); }
 
+function entrarNaApp(user){
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appWrap').style.display = 'block';
+  document.getElementById('userEmail').textContent = user.email;
+  startListeners();
+}
+
 auth.onAuthStateChanged(function(user){
+  if (firstAccessEmEndamento) return; // o fluxo de primeiro acesso decide quando entrar
   if (user){
-    document.getElementById('loginScreen').style.display = 'none';
-    document.getElementById('appWrap').style.display = 'block';
-    document.getElementById('userEmail').textContent = user.email;
-    startListeners();
+    entrarNaApp(user);
   } else {
     document.getElementById('appWrap').style.display = 'none';
     document.getElementById('loginScreen').style.display = 'block';
@@ -734,10 +807,19 @@ function salvarNumeroPedido(id){
   if (!el) return;
   var valor = el.value.trim();
   var arr = valor.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+  var pedidoAtual = escolaPedidosCache.filter(function(x){ return String(x.id)===String(id); })[0];
+  // Preenchimento manual do número assume que ele resolve o pedido INTEIRO (não dá pra informar
+  // quantidade parcial por SKU nesse campo) — por isso reseta a cobertura: total se preencheu,
+  // zerada se apagou. Pra vínculo parcial de verdade, use a aba "Conciliação de Pedidos".
+  var novaCobertura = {};
+  if (arr.length>0 && pedidoAtual){
+    var unidade = unidadeVetorPedido(pedidoAtual);
+    Object.keys(unidade).forEach(function(sku){ novaCobertura[sku] = unidade[sku] * (Number(pedidoAtual.quantidade)||0); });
+  }
   showLoading('Salvando número do pedido...');
-  db.collection('conciliador_pedidos').doc(id).update({ numeroPedidoFornecedor: arr.join(', '), numerosPedidoArray: arr }).then(function(){
+  db.collection('conciliador_pedidos').doc(id).update({ numeroPedidoFornecedor: arr.join(', '), numerosPedidoArray: arr, coberturaSku: novaCobertura }).then(function(){
     var p = escolaPedidosCache.filter(function(x){ return String(x.id)===String(id); })[0];
-    if (p){ p.numeroPedidoFornecedor = arr.join(', '); p.numerosPedidoArray = arr; }
+    if (p){ p.numeroPedidoFornecedor = arr.join(', '); p.numerosPedidoArray = arr; p.coberturaSku = novaCobertura; }
     editandoNumeroPedido[id] = false;
     hideLoading();
     renderPedidosFromCache();
